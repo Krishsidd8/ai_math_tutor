@@ -73,7 +73,7 @@ solveBtn.addEventListener('click', () => {
   const formData = new FormData();
   formData.append("image", file);
 
-  fetch('link', {
+  fetch('https://ai_math_tutor-production.up.railway.app/solve', {
     method: "POST",
     body: formData,
   })
