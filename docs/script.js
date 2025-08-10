@@ -1,18 +1,19 @@
+const API_BASE_URL = 'https://aimathtutor-production.up.railway.app';
+
 const darkModeToggle = document.getElementById('darkModeToggle');
 const body = document.body;
 const imageInput = document.getElementById('imageInput');
 const solveBtn = document.getElementById('solveBtn');
 const chatSection = document.getElementById('chatSection');
 const uploadBox = document.getElementById('uploadBox');
+const imagePreviewContainer = document.getElementById('imagePreviewContainer');
 
 let uploadedImageURL = null;
 
 function updateToggleText() {
-  if (body.classList.contains('dark-mode')) {
-    darkModeToggle.textContent = '☀️ Light Mode';
-  } else {
-    darkModeToggle.textContent = '🌙 Dark Mode';
-  }
+  darkModeToggle.textContent = body.classList.contains('dark-mode')
+    ? '☀️ Light Mode'
+    : '🌙 Dark Mode';
 }
 
 darkModeToggle.addEventListener('click', () => {
@@ -35,7 +36,16 @@ uploadBox.addEventListener('dragleave', () => {
   uploadBox.classList.remove('dragover');
 });
 
-const imagePreviewContainer = document.getElementById('imagePreviewContainer');
+uploadBox.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadBox.classList.remove('dragover');
+  const files = e.dataTransfer.files;
+  if (files.length > 0) {
+    imageInput.files = files;
+    const event = new Event('change');
+    imageInput.dispatchEvent(event);
+  }
+});
 
 imageInput.addEventListener('change', (event) => {
   const file = event.target.files[0];
@@ -44,24 +54,10 @@ imageInput.addEventListener('change', (event) => {
   const reader = new FileReader();
   reader.onload = function(e) {
     uploadedImageURL = e.target.result;
-
     imagePreviewContainer.innerHTML = `<img src="${uploadedImageURL}" alt="Uploaded Preview" />`;
   };
   reader.readAsDataURL(file);
 });
-
-uploadBox.addEventListener('drop', (e) => {
-  e.preventDefault();
-  uploadBox.classList.remove('dragover');
-  const files = e.dataTransfer.files;
-  if (files.length > 0) {
-    imageInput.files = files;
-
-    const event = new Event('change');
-    imageInput.dispatchEvent(event);
-  }
-});
-
 
 solveBtn.addEventListener('click', () => {
   if (!imageInput.files[0]) {
@@ -73,7 +69,7 @@ solveBtn.addEventListener('click', () => {
   const formData = new FormData();
   formData.append("image", file);
 
-  fetch('https://ai_math_tutor-production.up.railway.app/solve', {
+  fetch(`${API_BASE_URL}/solve`, {
     method: "POST",
     body: formData,
   })
