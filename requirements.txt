@@ -6,3 +6,4 @@ Pillow
 sympy
 gdown
 pickle5
+python-multipart
