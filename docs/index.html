@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI Math Tutor</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="banner-left">
+      <img src="Images/AI MATH TUTOR-LOGO.svg" alt="Logo" class="logo" />
+      <div class="title-group">
+        <h1>AI Math Tutor</h1>
+        <p class="subheader">SNAP. UPLOAD. UNDERSTAND.</p>
+      </div>
+    </div>
+    <button id="darkModeToggle">🌙 Dark Mode</button>
+  </header>
+
+  <main>
+    <section class="upload-section">
+      <h2>Upload Your Math Problem</h2>
+      <div class="upload-box" id="uploadBox">
+        <p>Drag & Drop or click to upload image</p>
+        <input type="file" id="imageInput" accept="image/*" hidden />
+      </div>
+      <div id="imagePreviewContainer"></div>
+      <button id="solveBtn">Solve Problem</button>
+    </section>
+    
+    <section class="chat-section" id="chatSection">
+      <div class="chat-message bot">
+        Hi, Upload a math problem and I’ll help you solve it.
+      </div>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
