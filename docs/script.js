@@ -22,12 +22,10 @@ darkModeToggle.addEventListener('click', () => {
 
 updateToggleText();
 
-// Click box to open file dialog
 uploadBox.addEventListener('click', () => {
   imageInput.click();
 });
 
-// Optional: Handle drag over styling
 uploadBox.addEventListener('dragover', (e) => {
   e.preventDefault();
   uploadBox.classList.add('dragover');
@@ -59,7 +57,6 @@ uploadBox.addEventListener('drop', (e) => {
   if (files.length > 0) {
     imageInput.files = files;
 
-    // 👇 Trigger change handler manually
     const event = new Event('change');
     imageInput.dispatchEvent(event);
   }
@@ -76,8 +73,7 @@ solveBtn.addEventListener('click', () => {
   const formData = new FormData();
   formData.append("image", file);
 
-  // ✅ Correct API endpoint
-  fetch('https://ai-math-tutor-production.up.railway.app/solve', {
+  fetch('link', {
     method: "POST",
     body: formData,
   })
@@ -88,7 +84,6 @@ solveBtn.addEventListener('click', () => {
       return;
     }
 
-    // Render output in chat
     const botMsg = document.createElement('div');
     botMsg.className = 'chat-message bot';
     botMsg.innerHTML = `
