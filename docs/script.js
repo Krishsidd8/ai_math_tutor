@@ -22,10 +22,12 @@ darkModeToggle.addEventListener('click', () => {
 
 updateToggleText();
 
+// Click box to open file dialog
 uploadBox.addEventListener('click', () => {
   imageInput.click();
 });
 
+// Optional: Handle drag over styling
 uploadBox.addEventListener('dragover', (e) => {
   e.preventDefault();
   uploadBox.classList.add('dragover');
@@ -45,7 +47,7 @@ imageInput.addEventListener('change', (event) => {
   reader.onload = function(e) {
     uploadedImageURL = e.target.result;
 
-    imagePreviewContainer.innerHTML = '<img src="${uploadedImageURL}" alt="Uploaded Preview" />';
+    imagePreviewContainer.innerHTML = `<img src="${uploadedImageURL}" alt="Uploaded Preview" />`;
   };
   reader.readAsDataURL(file);
 });
@@ -57,10 +59,12 @@ uploadBox.addEventListener('drop', (e) => {
   if (files.length > 0) {
     imageInput.files = files;
 
+    // 👇 Trigger change handler manually
     const event = new Event('change');
     imageInput.dispatchEvent(event);
   }
 });
+
 
 solveBtn.addEventListener('click', () => {
   if (!imageInput.files[0]) {
@@ -72,7 +76,8 @@ solveBtn.addEventListener('click', () => {
   const formData = new FormData();
   formData.append("image", file);
 
-  fetch('link', {
+  // ✅ Correct API endpoint
+  fetch('https://ai-math-tutor-production.up.railway.app/solve', {
     method: "POST",
     body: formData,
   })
@@ -83,6 +88,7 @@ solveBtn.addEventListener('click', () => {
       return;
     }
 
+    // Render output in chat
     const botMsg = document.createElement('div');
     botMsg.className = 'chat-message bot';
     botMsg.innerHTML = `
