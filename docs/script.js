@@ -45,7 +45,7 @@ imageInput.addEventListener('change', (event) => {
   reader.onload = function(e) {
     uploadedImageURL = e.target.result;
 
-    imagePreviewContainer.innerHTML = <img src="${uploadedImageURL}" alt="Uploaded Preview" />;
+    imagePreviewContainer.innerHTML = '<img src="${uploadedImageURL}" alt="Uploaded Preview" />';
   };
   reader.readAsDataURL(file);
 });
