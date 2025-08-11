@@ -75,17 +75,24 @@ solveBtn.addEventListener('click', () => {
   })
   .then(res => res.json())
   .then(data => {
+    console.log("Backend response:", data);
+
     if (data.error) {
-      alert("Error: " + data.error);
+      alert("Error from backend: " + data.error);
+      return;
+    }
+
+    if (!data.steps || !Array.isArray(data.steps)) {
+      alert("No steps found in backend response. Full response: " + JSON.stringify(data));
       return;
     }
 
     const botMsg = document.createElement('div');
     botMsg.className = 'chat-message bot';
     botMsg.innerHTML = `
-      <strong>Predicted LaTeX:</strong> ${data.latex}<br/>
+      <strong>Predicted LaTeX:</strong> ${data.latex || "N/A"}<br/>
       <strong>Step-by-Step Solution:</strong>
-      <ol>${data.steps.map(s => `<li>${s.step}<br/><code>${s.symbolic}</code></li>`).join('')}</ol>
+      <ol>${data.steps.map(s => `<li>${s.step || ""}<br/><code>${s.symbolic || ""}</code></li>`).join('')}</ol>
     `;
     chatSection.appendChild(botMsg);
     chatSection.scrollTop = chatSection.scrollHeight;
