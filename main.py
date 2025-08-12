@@ -268,6 +268,7 @@ def read_root():
 
 @app.post("/solve")
 async def solve_problem(file: UploadFile = File(...)):
+    print(f"Received file: {file.filename}, content_type: {file.content_type}")
     try:
         contents = await file.read()
 
