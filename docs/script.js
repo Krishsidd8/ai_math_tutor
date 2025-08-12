@@ -20,12 +20,9 @@ darkModeToggle.addEventListener('click', () => {
   body.classList.toggle('dark-mode');
   updateToggleText();
 });
-
 updateToggleText();
 
-uploadBox.addEventListener('click', () => {
-  imageInput.click();
-});
+uploadBox.addEventListener('click', () => imageInput.click());
 
 uploadBox.addEventListener('dragover', (e) => {
   e.preventDefault();
@@ -42,8 +39,7 @@ uploadBox.addEventListener('drop', (e) => {
   const files = e.dataTransfer.files;
   if (files.length > 0) {
     imageInput.files = files;
-    const event = new Event('change');
-    imageInput.dispatchEvent(event);
+    imageInput.dispatchEvent(new Event('change'));
   }
 });
 
@@ -67,35 +63,35 @@ solveBtn.addEventListener('click', () => {
 
   const file = imageInput.files[0];
   const formData = new FormData();
-  formData.append("image", file);
+  formData.append("file", file);
 
   fetch(`${API_BASE_URL}/solve`, {
     method: "POST",
     body: formData,
   })
-  .then(res => res.json())
-  .then(data => {
-    console.log("Backend response:", data);
+    .then(res => res.json())
+    .then(data => {
+      console.log("Backend response:", data);
 
-    if (data.error) {
-      alert("Error from backend: " + data.error);
-      return;
-    }
+      if (data.error) {
+        alert("Error from backend: " + data.error);
+        return;
+      }
 
-    if (!data.steps || !Array.isArray(data.steps)) {
-      alert("No steps found in backend response. Full response: " + JSON.stringify(data));
-      return;
-    }
+      if (!data.steps || !Array.isArray(data.steps)) {
+        alert("No steps found in backend response. Full response: " + JSON.stringify(data));
+        return;
+      }
 
-    const botMsg = document.createElement('div');
-    botMsg.className = 'chat-message bot';
-    botMsg.innerHTML = `
-      <strong>Predicted LaTeX:</strong> ${data.latex || "N/A"}<br/>
-      <strong>Step-by-Step Solution:</strong>
-      <ol>${data.steps.map(s => `<li>${s.step || ""}<br/><code>${s.symbolic || ""}</code></li>`).join('')}</ol>
-    `;
-    chatSection.appendChild(botMsg);
-    chatSection.scrollTop = chatSection.scrollHeight;
-  })
-  .catch(err => alert("Failed to solve: " + err));
+      const botMsg = document.createElement('div');
+      botMsg.className = 'chat-message bot';
+      botMsg.innerHTML = `
+        <strong>Predicted LaTeX:</strong> ${data.latex || "N/A"}<br/>
+        <strong>Step-by-Step Solution:</strong>
+        <ol>${data.steps.map(s => `<li>${s.step || ""}<br/><code>${s.symbolic || ""}</code></li>`).join('')}</ol>
+      `;
+      chatSection.appendChild(botMsg);
+      chatSection.scrollTop = chatSection.scrollHeight;
+    })
+    .catch(err => alert("Failed to solve: " + err));
 });

@@ -256,16 +256,25 @@ async def ocr_base64_endpoint(payload: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/solve")
-async def solve_endpoint(payload: dict):
-    """
-    Accepts {"latex": "<latex string>"} and returns JSON of steps.
-    """
-    latex = payload.get("latex")
-    if not latex:
-        raise HTTPException(status_code=400, detail="Missing 'latex' field.")
-    res = solve_with_steps(latex)
-    return JSONResponse(res)
+@app.get("/")
+def read_root():
+    return {"message": "AI Math Tutor Backend is running!"}
 
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+@app.post("/solve")
+async def solve_problem(file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+
+        image = Image.open(io.BytesIO(contents)).convert("RGB")
+
+        latex = generate_from_image(image)
+
+        steps = solve_with_steps(latex)
+
+        return {
+            "latex": latex,
+            "steps": steps
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
