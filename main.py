@@ -91,26 +91,46 @@ vocab_size = None
 def load_assets():
     global tokenizer, model, vocab_size
 
-    ocr_id = os.getenv(OCR_CHECKPOINT_ENV)
-    tok_id = os.getenv(TOKENIZER_ENV)
+    # TEMP HARDCODE TEST
+    if not os.path.exists(TOKENIZER_LOCAL):
+        raise RuntimeError("tokenizer.pkl missing locally.")
 
-    if tok_id is None or ocr_id is None:
-        raise RuntimeError(f"Please set environment variables {OCR_CHECKPOINT_ENV} and {TOKENIZER_ENV} (Google Drive file IDs).")
-
-    download_from_gdrive(tok_id, TOKENIZER_LOCAL)
-    download_from_gdrive(ocr_id, OCR_LOCAL)
-
+    print("Loading tokenizer from local disk...")
     with open(TOKENIZER_LOCAL, "rb") as f:
         tokenizer = pickle.load(f)
 
     vocab_size = len(tokenizer.vocab)
+    print("Vocab size:", vocab_size)
+    
+    ocr_id = os.getenv(OCR_CHECKPOINT_ENV)
+    tok_id = os.getenv(TOKENIZER_ENV)
+
+    print(f"ocr_id = {ocr_id}")
+    print(f"tok_id = {tok_id}")
+
+    if tok_id is None or ocr_id is None:
+        raise RuntimeError(f"Please set environment variables {OCR_CHECKPOINT_ENV} and {TOKENIZER_ENV} (Google Drive file IDs).")
+
+    print("Downloading tokenizer...")
+    download_from_gdrive(tok_id, TOKENIZER_LOCAL)
+    print("Tokenizer downloaded.")
+
+    print("Downloading model...")
+    download_from_gdrive(ocr_id, OCR_LOCAL)
+    print("Model downloaded.")
+
+    print("Loading tokenizer...")
+    with open(TOKENIZER_LOCAL, "rb") as f:
+        tokenizer = pickle.load(f)
+    print("Tokenizer loaded.")
+
+    vocab_size = len(tokenizer.vocab)
     model = OCRModel(vocab_size=vocab_size)
+
+    print("Loading model state...")
     map_location = DEVICE
     state = torch.load(OCR_LOCAL, map_location=map_location)
-    if isinstance(state, dict) and 'state_dict' in state:
-        sd = state['state_dict']
-    else:
-        sd = state
+    sd = state['state_dict'] if isinstance(state, dict) and 'state_dict' in state else state
     try:
         model.load_state_dict(sd)
     except Exception as e:
