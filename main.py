@@ -90,17 +90,6 @@ vocab_size = None
 
 def load_assets():
     global tokenizer, model, vocab_size
-
-    # TEMP HARDCODE TEST
-    if not os.path.exists(TOKENIZER_LOCAL):
-        raise RuntimeError("tokenizer.pkl missing locally.")
-
-    print("Loading tokenizer from local disk...")
-    with open(TOKENIZER_LOCAL, "rb") as f:
-        tokenizer = pickle.load(f)
-
-    vocab_size = len(tokenizer.vocab)
-    print("Vocab size:", vocab_size)
     
     ocr_id = os.getenv(OCR_CHECKPOINT_ENV)
     tok_id = os.getenv(TOKENIZER_ENV)
@@ -125,7 +114,16 @@ def load_assets():
     print("Tokenizer loaded.")
 
     vocab_size = len(tokenizer.vocab)
+    print("Vocab size:", vocab_size)
     model = OCRModel(vocab_size=vocab_size)
+
+    # TEMP HARDCODE TEST
+    if not os.path.exists(TOKENIZER_LOCAL):
+        raise RuntimeError("tokenizer.pkl missing locally.")
+
+    print("Loading tokenizer from local disk...")
+    with open(TOKENIZER_LOCAL, "rb") as f:
+        tokenizer = pickle.load(f)
 
     print("Loading model state...")
     map_location = DEVICE
