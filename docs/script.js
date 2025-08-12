@@ -88,7 +88,7 @@ solveBtn.addEventListener('click', () => {
       botMsg.innerHTML = `
         <strong>Predicted LaTeX:</strong> ${data.latex || "N/A"}<br/>
         <strong>Step-by-Step Solution:</strong>
-        <ol>${data.steps.map(s => `<li>${s.step || ""}<br/><code>${s.symbolic || ""}</code></li>`).join('')}</ol>
+        <ol>${data.steps.map(s => `<li>${s.step || ""}<br/><code>${s.detail  || ""}</code></li>`).join('')}</ol>
       `;
       chatSection.appendChild(botMsg);
       chatSection.scrollTop = chatSection.scrollHeight;

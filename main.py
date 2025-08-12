@@ -25,8 +25,8 @@ MAX_HEIGHT = 384
 MAX_WIDTH = 512
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-OCR_CHECKPOINT_ENV = "1Zv_xZNgm-3rg97CeFgU3sByKVroS0EDz"
-TOKENIZER_ENV = "1VYs3TJh5p7dLHC5OuVjAYlykFkli379e"
+OCR_CHECKPOINT_ENV = "GDRIVE_OCR_ID"
+TOKENIZER_ENV = "GDRIVE_TOKENIZER_ID"
 
 OCR_LOCAL = "ocr_checkpoint.pt"
 TOKENIZER_LOCAL = "tokenizer.pkl"
