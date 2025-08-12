@@ -7,3 +7,4 @@ sympy
 gdown
 pickle5
 python-multipart
+antlr4-python3-runtime==4.11
