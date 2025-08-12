@@ -195,12 +195,14 @@ def solve_with_steps(latex_str):
         return {"error": f"Error parsing or solving LaTeX: {str(e)}"}
 
 app = FastAPI(title="AI Math Tutor Backend")
-
+'''
 allowed = os.getenv("ALLOWED_ORIGINS", "*")
 if allowed == "*":
     origins = ["*"]
 else:
     origins = [o.strip() for o in allowed.split(",")]
+'''
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
