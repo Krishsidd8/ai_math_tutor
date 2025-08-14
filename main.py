@@ -126,30 +126,33 @@ def load_assets():
     print("Model and tokenizer loaded. Device:", DEVICE)
 
 def generate_from_image(img: Image.Image, max_len=150) -> str:
-    """
-    Given a PIL image, returns decoded latex string using greedy decoding.
-    """
     if tokenizer is None or model is None:
         raise RuntimeError("Model/tokenizer not loaded.")
 
+    print("[DEBUG] Starting image preprocessing...")
     img_t = transform(img).unsqueeze(0).to(DEVICE)
-    B = 1
+    print(f"[DEBUG] Image tensor shape: {img_t.shape}")
 
+    B = 1
     sos = tokenizer.t2i['<SOS>']
     eos = tokenizer.t2i['<EOS>']
 
     generated = [sos]
-    for _ in range(max_len):
+    for step in range(max_len):
         tgt_tensor = torch.tensor(generated, dtype=torch.long, device=DEVICE).unsqueeze(1)
         with torch.no_grad():
             out = model(img_t, tgt_tensor)
         last_logits = out[-1, 0]
         next_id = int(torch.argmax(last_logits).cpu().numpy())
+
+        print(f"[DEBUG] Step {step}: Next token id = {next_id}, token = {tokenizer.i2t.get(next_id, '?')}")
+
         if next_id == eos:
             break
         generated.append(next_id)
 
     decoded = tokenizer.decode(generated)
+    print(f"[INFO] Decoded LaTeX: {decoded}")
     return decoded
 
 def get_steps_for_univariate(equation, variable):
@@ -169,30 +172,42 @@ def get_steps_for_univariate(equation, variable):
     if sols:
         for i, sol in enumerate(sols, 1):
             steps.append((f"Solve for {variable}", f"{variable} = {sp.latex(sol)}"))
-
+    
+    print(f"[DEBUG] Solving equation: {equation} for variable {variable}")
+    
     return steps
 
 def solve_with_steps(latex_str):
+    print(f"[INFO] Attempting to parse LaTeX: {latex_str}")
     try:
         expr = parse_latex(latex_str)
+        print(f"[INFO] Parsed SymPy Expression: {expr}")
+
         if isinstance(expr, sp.Equality):
             lhs, rhs = expr.lhs, expr.rhs
         else:
             lhs, rhs = expr, 0
 
         equation = Eq(lhs, rhs)
+        print(f"[INFO] Equation formed: {equation}")
+
         variables = list(equation.free_symbols)
         if not variables:
             return {"error": "No variables found in expression."}
         var = variables[0]
+        print(f"[INFO] Solving with respect to variable: {var}")
+
         steps = get_steps_for_univariate(equation, var)
         return {
             "equation": sp.latex(equation),
             "variable": str(var),
             "steps": [{"desc": d, "detail": det} for d, det in steps]
         }
+
     except Exception as e:
+        print(f"[ERROR] Failed to parse or solve LaTeX: {e}")
         return {"error": f"Error parsing or solving LaTeX: {str(e)}"}
+
 
 app = FastAPI(title="AI Math Tutor Backend")
 '''
@@ -265,7 +280,7 @@ async def ocr_base64_endpoint(payload: dict):
 @app.get("/")
 def read_root():
     return {"message": "AI Math Tutor Backend is running!"}
-
+    
 @app.post("/solve")
 async def solve_problem(file: UploadFile = File(...)):
     print(f"Received file: {file.filename}, content_type: {file.content_type}")
@@ -273,10 +288,14 @@ async def solve_problem(file: UploadFile = File(...)):
         contents = await file.read()
 
         image = Image.open(io.BytesIO(contents)).convert("RGB")
+        print("[DEBUG] Image loaded successfully.")
 
         latex = generate_from_image(image)
+        print(f"[INFO] OCR Output LaTeX: {latex}")
 
         steps = solve_with_steps(latex)
+
+        print(f"[INFO] Final solve response: {steps}")
 
         return {
             "latex": latex,
@@ -284,4 +303,5 @@ async def solve_problem(file: UploadFile = File(...)):
         }
 
     except Exception as e:
+        print(f"[ERROR] Internal server error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
