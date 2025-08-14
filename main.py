@@ -58,7 +58,7 @@ class OCRModel(nn.Module):
 
 transform = transforms.Compose([
     transforms.Resize((MAX_HEIGHT, MAX_WIDTH)),
-#    transforms.Grayscale(num_output_channels=1),
+    transforms.Grayscale(num_output_channels=1),
     transforms.ToTensor()
 ])
 
