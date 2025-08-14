@@ -134,6 +134,7 @@ def generate_from_image(img: Image.Image, max_len=150) -> str:
     print(f"[DEBUG] Image tensor shape: {img_t.shape}")
 
     B = 1
+    
     sos = tokenizer.t2i['<SOS>']
     eos = tokenizer.t2i['<EOS>']
 
@@ -174,7 +175,7 @@ def get_steps_for_univariate(equation, variable):
             steps.append((f"Solve for {variable}", f"{variable} = {sp.latex(sol)}"))
     
     print(f"[DEBUG] Solving equation: {equation} for variable {variable}")
-    
+
     return steps
 
 def solve_with_steps(latex_str):
