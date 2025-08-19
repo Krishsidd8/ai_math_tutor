@@ -2,7 +2,6 @@ import os
 import io
 import pickle
 from typing import Optional, List, Tuple
-
 import torch
 import torch.nn as nn
 from PIL import Image
