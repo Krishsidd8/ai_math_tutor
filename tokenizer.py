@@ -15,4 +15,4 @@ class LatexTokenizer:
         return [self.t2i['<SOS>']] + [self.t2i.get(tok, self.t2i['<UNK>']) for tok in txt.split()] + [self.t2i['<EOS>']]
 
     def decode(self, ids):
-        return ' '.join(self.vocab[i] for i in ids if self.vocab[i] not in self.specials)
+        return ' '.join(self.i2t[i] for i in ids if self.i2t[i] not in self.specials)
