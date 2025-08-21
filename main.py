@@ -133,7 +133,7 @@ def predict_image(img: Image.Image, max_len=60):
     for _ in range(max_len):
         tgt_mask = torch.triu(torch.full((tgt.size(1), tgt.size(1)), float('-inf')), diagonal=1)
         logits = model(img_t, tgt, tgt_mask=tgt_mask)
-        next_token = logits[-1].argmax(dim=-1).view(1, 1)
+        next_token = logits[-1].argmax(dim=-1).unsqueeze(0)
         tgt = torch.cat([tgt, next_token], dim=1)
         
         if next_token.item() == tokenizer.t2i['<EOS>']:
