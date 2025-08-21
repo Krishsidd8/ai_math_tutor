@@ -1,36 +1,40 @@
-import os
-import io
-import pickle
-from typing import Optional, List, Tuple
 import torch
 import torch.nn as nn
-from PIL import Image
 from torchvision import transforms
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image
+from fastapi import FastAPI, File, UploadFile
 import uvicorn
-from tokenizer import LatexTokenizer
+import os, io, json, traceback, logging
+import gdown
+import google.generativeai as genai
+from sympy import sympify, simplify
+from fastapi.middleware.cors import CORSMiddleware
 
-import sympy as sp
-from sympy.parsing.latex import parse_latex
-from sympy import Eq, simplify, factor, solve
+# -------------------- LOGGING CONFIG --------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
 
-try:
-    import gdown
-except Exception:
-    gdown = None
+# -------------------- CONSTANTS --------------------
+max_height, max_width = 384, 512
+checkpoint_path = "ocr_checkpoint.pt"
+file_id = os.environ.get("GDRIVE_FILE_ID")
+if not file_id:
+    raise RuntimeError("Missing GDRIVE_FILE_ID environment variable")
 
-MAX_HEIGHT = 384
-MAX_WIDTH = 512
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# -------------------- CHECKPOINT DOWNLOAD --------------------
+if not os.path.exists(checkpoint_path):
+    logger.info("Checkpoint not found. Downloading from Google Drive...")
+    try:
+        gdown.download(f"https://drive.google.com/uc?id={file_id}", checkpoint_path, quiet=False)
+        logger.info("Checkpoint downloaded successfully.")
+    except Exception as e:
+        logger.error(f"Failed to download checkpoint: {e}")
+        raise
 
-OCR_CHECKPOINT_ENV = "GDRIVE_OCR_ID"
-TOKENIZER_ENV = "GDRIVE_TOKENIZER_ID"
-
-OCR_LOCAL = "ocr_checkpoint.pt"
-TOKENIZER_LOCAL = "tokenizer.pkl"
-
+# -------------------- MODEL CLASSES --------------------
 class OCRModel(nn.Module):
     def __init__(self, vocab_size, hidden_dim=256):
         super().__init__()
@@ -38,7 +42,7 @@ class OCRModel(nn.Module):
             nn.Conv2d(1, 32, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
             nn.Conv2d(32, 64, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
         )
-        conv_out = 64 * (MAX_HEIGHT // 4) * (MAX_WIDTH // 4)
+        conv_out = 64 * (max_height // 4) * (max_width // 4)
         self.fc = nn.Linear(conv_out, hidden_dim)
         self.embedding = nn.Embedding(vocab_size, hidden_dim)
         self.transformer = nn.Transformer(
@@ -55,253 +59,170 @@ class OCRModel(nn.Module):
         out = self.transformer(enc, tgt_emb, tgt_mask=tgt_mask)
         return self.out(out)
 
-transform = transforms.Compose([
-    transforms.Resize((MAX_HEIGHT, MAX_WIDTH)),
-    transforms.Grayscale(num_output_channels=1),
-    transforms.ToTensor()
-])
+class LatexTokenizer:
+    def __init__(self, vocab, specials):
+        self.specials = specials
+        self.vocab = vocab
+        self.t2i = {tok: i for i, tok in enumerate(self.vocab)}
+        self.i2t = {i: tok for tok, i in self.t2i.items()}
 
-def download_from_gdrive(file_id: str, out_path: str):
-    if os.path.exists(out_path):
-        return out_path
-    if gdown is None:
-        raise RuntimeError("gdown is required to download from Google Drive on-the-fly. Add to requirements.")
-    url = f"https://drive.google.com/uc?id={file_id}"
-    gdown.download(url, out_path, quiet=False)
-    return out_path
+    def decode(self, ids):
+        return ' '.join(self.i2t[i] for i in ids if self.i2t[i] not in self.specials)
 
-tokenizer: Optional[LatexTokenizer] = None
-model: Optional[OCRModel] = None
-vocab_size = None
-
-def load_assets():
-    global tokenizer, model, vocab_size
-    
-    ocr_id = os.getenv(OCR_CHECKPOINT_ENV)
-    tok_id = os.getenv(TOKENIZER_ENV)
-
-    print(f"ocr_id = {ocr_id}")
-    print(f"tok_id = {tok_id}")
-
-    if tok_id is None or ocr_id is None:
-        raise RuntimeError(f"Please set environment variables {OCR_CHECKPOINT_ENV} and {TOKENIZER_ENV} (Google Drive file IDs).")
-
-    print("Downloading tokenizer...")
-    download_from_gdrive(tok_id, TOKENIZER_LOCAL)
-    print("Tokenizer downloaded.")
-
-    print("Downloading model...")
-    download_from_gdrive(ocr_id, OCR_LOCAL)
-    print("Model downloaded.")
-
-    print("Loading tokenizer...")
-    with open(TOKENIZER_LOCAL, "rb") as f:
-        tokenizer = pickle.load(f)
-    print("Tokenizer loaded.")
-
-    vocab_size = len(tokenizer.vocab)
-    print("Vocab size:", vocab_size)
-    model = OCRModel(vocab_size=vocab_size)
-
-    # TEMP HARDCODE TEST
-    if not os.path.exists(TOKENIZER_LOCAL):
-        raise RuntimeError("tokenizer.pkl missing locally.")
-
-    print("Loading tokenizer from local disk...")
-    with open(TOKENIZER_LOCAL, "rb") as f:
-        tokenizer = pickle.load(f)
-
-    print("Loading model state...")
-    map_location = DEVICE
-    state = torch.load(OCR_LOCAL, map_location=map_location)
-    sd = state['state_dict'] if isinstance(state, dict) and 'state_dict' in state else state
-    try:
-        model.load_state_dict(sd)
-    except Exception as e:
-        print("Warning: state_dict load failed:", e)
-        model.load_state_dict(sd, strict=False)
-    model.to(DEVICE)
+# -------------------- LOAD MODEL --------------------
+try:
+    logger.info("Loading model checkpoint...")
+    ckpt = torch.load(checkpoint_path, map_location="cpu")
+    tokenizer = LatexTokenizer(ckpt['tokenizer_vocab'], ckpt['specials'])
+    model = OCRModel(len(tokenizer.vocab))
+    model.load_state_dict(ckpt['model'])
     model.eval()
-    print("Model and tokenizer loaded. Device:", DEVICE)
+    logger.info("Model loaded and ready.")
+except Exception as e:
+    logger.error("Failed to load model checkpoint:")
+    logger.error(traceback.format_exc())
+    raise
 
-def generate_from_image(img: Image.Image, max_len=150) -> str:
-    if tokenizer is None or model is None:
-        raise RuntimeError("Model/tokenizer not loaded.")
+# -------------------- FASTAPI APP --------------------
+app = FastAPI()
 
-    print("[DEBUG] Starting image preprocessing...")
-    img_t = transform(img).unsqueeze(0).to(DEVICE)
-    print(f"[DEBUG] Image tensor shape: {img_t.shape}")
-
-    B = 1
-    
-    sos = tokenizer.t2i['<SOS>']
-    eos = tokenizer.t2i['<EOS>']
-
-    generated = [sos]
-    for step in range(max_len):
-        tgt_tensor = torch.tensor(generated, dtype=torch.long, device=DEVICE).unsqueeze(1)
-        with torch.no_grad():
-            out = model(img_t, tgt_tensor)
-        last_logits = out[-1, 0]
-        next_id = int(torch.argmax(last_logits).cpu().numpy())
-
-        print(f"[DEBUG] Step {step}: Next token id = {next_id}, token = {tokenizer.i2t.get(next_id, '?')}")
-
-        if next_id == eos:
-            break
-        generated.append(next_id)
-
-    decoded = tokenizer.decode(generated)
-    print(f"[INFO] Decoded LaTeX: {decoded}")
-    return decoded
-
-def get_steps_for_univariate(equation, variable):
-    steps = []
-
-    lhs, rhs = equation.lhs, equation.rhs
-    full_expr = simplify(lhs - rhs)
-    steps.append(("Move all terms to one side", f"{sp.latex(full_expr)} = 0"))
-
-    factored = factor(full_expr)
-    if factored != full_expr:
-        steps.append(("Factor the expression", f"{sp.latex(factored)} = 0"))
-    else:
-        steps.append(("Expression cannot be factored further", f"{sp.latex(full_expr)} = 0"))
-
-    sols = solve(equation, variable)
-    if sols:
-        for i, sol in enumerate(sols, 1):
-            steps.append((f"Solve for {variable}", f"{variable} = {sp.latex(sol)}"))
-    
-    print(f"[DEBUG] Solving equation: {equation} for variable {variable}")
-
-    return steps
-
-def solve_with_steps(latex_str):
-    print(f"[INFO] Attempting to parse LaTeX: {latex_str}")
+@app.post("/predict/")
+async def predict(file: UploadFile = File(...)):
+    logger.info("Received /predict request.")
     try:
-        expr = parse_latex(latex_str)
-        print(f"[INFO] Parsed SymPy Expression: {expr}")
-
-        if isinstance(expr, sp.Equality):
-            lhs, rhs = expr.lhs, expr.rhs
-        else:
-            lhs, rhs = expr, 0
-
-        equation = Eq(lhs, rhs)
-        print(f"[INFO] Equation formed: {equation}")
-
-        variables = list(equation.free_symbols)
-        if not variables:
-            return {"error": "No variables found in expression."}
-        var = variables[0]
-        print(f"[INFO] Solving with respect to variable: {var}")
-
-        steps = get_steps_for_univariate(equation, var)
-        return {
-            "equation": sp.latex(equation),
-            "variable": str(var),
-            "steps": [{"desc": d, "detail": det} for d, det in steps]
-        }
-
+        img = Image.open(file.file).convert("L")
+        result = predict_image(img)
+        logger.info(f"Prediction result: {result}")
+        return {"latex": result}
     except Exception as e:
-        print(f"[ERROR] Failed to parse or solve LaTeX: {e}")
-        return {"error": f"Error parsing or solving LaTeX: {str(e)}"}
+        logger.error("Error during prediction:")
+        logger.error(traceback.format_exc())
+        return {"error": str(e)}
 
+@app.post("/solve")
+async def solve(file: UploadFile = File(...)):
+    logger.info("Received /solve request.")
+    try:
+        contents = await file.read()
+        img = Image.open(io.BytesIO(contents))
+        latex = predict_image(img) or ""
+        logger.info(f"Predicted LaTeX: {latex}")
 
-app = FastAPI(title="AI Math Tutor Backend")
-'''
-allowed = os.getenv("ALLOWED_ORIGINS", "*")
-if allowed == "*":
-    origins = ["*"]
-else:
-    origins = [o.strip() for o in allowed.split(",")]
-'''
+        steps = solve_with_gemini(latex)
+        if not steps:
+            logger.warning("Gemini returned no steps. Falling back to SymPy.")
+            steps = quick_sympy_steps(latex)
 
+        logger.info(f"Steps returned: {len(steps)}")
+        return {"latex": latex, "steps": steps}
+    except Exception as e:
+        logger.error("Error during solve:")
+        logger.error(traceback.format_exc())
+        return {"error": str(e)}
+
+# -------------------- IMAGE TO LATEX --------------------
+def predict_image(img: Image.Image, max_len=60):
+    logger.info("Starting image prediction...")
+    transform = transforms.Compose([
+        transforms.Resize((max_height, max_width)),
+        transforms.ToTensor()
+    ])
+    img_t = transform(img.convert("L")).unsqueeze(0)
+
+    tgt = torch.tensor([[tokenizer.t2i['<SOS>']]], dtype=torch.long)
+    for _ in range(max_len):
+        tgt_mask = torch.triu(torch.full((tgt.size(1), tgt.size(1)), float('-inf')), diagonal=1)
+        logits = model(img_t, tgt, tgt_mask=tgt_mask)
+        next_token = logits[-1].argmax(dim=-1).unsqueeze(0)
+        tgt = torch.cat([tgt, next_token.unsqueeze(0)], dim=1)
+        if next_token.item() == tokenizer.t2i['<EOS>']:
+            break
+    result = tokenizer.decode(tgt.squeeze().tolist())
+    logger.info(f"Decoded result: {result}")
+    return result
+
+# -------------------- CORS --------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["*"],  # Consider restricting this in production
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-def startup_event():
-    try:
-        load_assets()
-    except Exception as e:
-        print("Startup error (assets not loaded):", e)
+# -------------------- GEMINI SETUP --------------------
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+GEMINI_MODEL = genai.GenerativeModel("gemini-2.5-flash")
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "device": DEVICE}
-
-@app.post("/ocr")
-async def ocr_endpoint(file: UploadFile = File(...)):
-    """
-    Accepts an uploaded image file (png/jpg). Returns decoded LaTeX string.
-    """
-    content = await file.read()
-    try:
-        img = Image.open(io.BytesIO(content)).convert("RGB")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
-
-    try:
-        latex_str = generate_from_image(img)
-        return {"latex": latex_str}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/ocr_base64")
-async def ocr_base64_endpoint(payload: dict):
-    """
-    Accepts {"image": "<base64 data uri or base64 blob>"}.
-    """
-    b64 = payload.get("image")
-    if not b64:
-        raise HTTPException(status_code=400, detail="Missing 'image' field with base64 data.")
-    if b64.startswith("data:"):
-        b64 = b64.split(",", 1)[1]
-    import base64
-    try:
-        data = base64.b64decode(b64)
-        img = Image.open(io.BytesIO(data)).convert("RGB")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid base64 image: {e}")
-
-    try:
-        latex_str = generate_from_image(img)
-        return {"latex": latex_str}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/")
-def read_root():
-    return {"message": "AI Math Tutor Backend is running!"}
-    
-@app.post("/solve")
-async def solve_problem(file: UploadFile = File(...)):
-    print(f"Received file: {file.filename}, content_type: {file.content_type}")
-    try:
-        contents = await file.read()
-
-        image = Image.open(io.BytesIO(contents)).convert("RGB")
-        print("[DEBUG] Image loaded successfully.")
-
-        latex = generate_from_image(image)
-        print(f"[INFO] OCR Output LaTeX: {latex}")
-
-        steps = solve_with_steps(latex)
-
-        print(f"[INFO] Final solve response: {steps}")
-
-        return {
-            "latex": latex,
-            "steps": steps
+STEP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "steps": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "step":   {"type": "string"},
+                    "detail": {"type": "string"}
+                },
+                "required": ["step", "detail"]
+            }
         }
+    },
+    "required": ["steps"]
+}
 
+def solve_with_gemini(latex_expr: str) -> list[dict]:
+    logger.info("Calling Gemini for step-by-step solution...")
+    prompt = (
+        "You are a math tutor. Given a math expression or equation in LaTeX, "
+        "produce a clear, correct, step-by-step solution. "
+        "Only return JSON that matches the provided schema. "
+        "Avoid extra commentary. Keep steps concise but correct.\n\n"
+        f"LaTeX: {latex_expr}"
+    )
+    try:
+        resp = GEMINI_MODEL.generate_content(
+            [prompt],
+            generation_config={
+                "response_mime_type": "application/json",
+                "response_schema": STEP_SCHEMA,
+                "temperature": 0.2,
+            },
+        )
+        data = json.loads(resp.text)
+        steps = data.get("steps", [])
+        logger.info("Gemini returned valid response.")
+        return [
+            {"step": s.get("step", ""), "detail": s.get("detail", "")}
+            for s in steps if isinstance(s, dict)
+        ]
     except Exception as e:
-        print(f"[ERROR] Internal server error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Gemini call failed:")
+        logger.error(traceback.format_exc())
+        return [{"step": "AI solver unavailable", "detail": str(e)}]
+
+def quick_sympy_steps(latex_expr: str) -> list[dict]:
+    logger.info("Attempting fallback using SymPy...")
+    try:
+        if "=" in latex_expr:
+            lhs_txt, rhs_txt = latex_expr.split("=", 1)
+            lhs, rhs = sympify(lhs_txt), sympify(rhs_txt)
+            expr = lhs - rhs
+        else:
+            expr = sympify(latex_expr)
+
+        simp = simplify(expr)
+        logger.info("SymPy simplification successful.")
+        return [
+            {"step": "Parse LaTeX", "detail": str(expr)},
+            {"step": "Simplify",   "detail": str(simp)},
+        ]
+    except Exception as e:
+        logger.error("SymPy simplification failed:")
+        logger.error(traceback.format_exc())
+        return [{"step": "Could not parse with SymPy", "detail": str(e)}]
+
+# -------------------- START SERVER --------------------
+if __name__ == "__main__":
+    logger.info("Starting FastAPI server on http://0.0.0.0:8000")
+    uvicorn.run(app, host="0.0.0.0", port=8000)

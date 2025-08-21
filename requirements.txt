@@ -1,10 +1,8 @@
-fastapi==0.95.1
-uvicorn[standard]==0.22.0
-torch>=1.12.0
+torch
 torchvision
-Pillow
+fastapi
+uvicorn
+pillow
 sympy
 gdown
-pickle5
-python-multipart
-antlr4-python3-runtime==4.11
+google-generativeai

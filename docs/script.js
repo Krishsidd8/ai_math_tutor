@@ -47,6 +47,19 @@ imageInput.addEventListener('change', (event) => {
   const file = event.target.files[0];
   if (!file) return;
 
+  if (!file.type.startsWith("image/")) {
+    alert("Please upload a valid image file.");
+    imageInput.value = "";
+    return;
+  }
+
+  const maxSizeMB = 5;
+  if (file.size > maxSizeMB * 1024 * 1024) {
+    alert(`File size exceeds ${maxSizeMB}MB. Please upload a smaller image.`);
+    imageInput.value = "";
+    return;
+  }
+
   const reader = new FileReader();
   reader.onload = function(e) {
     uploadedImageURL = e.target.result;
@@ -56,14 +69,29 @@ imageInput.addEventListener('change', (event) => {
 });
 
 solveBtn.addEventListener('click', () => {
-  if (!imageInput.files[0]) {
+  const file = imageInput.files[0];
+
+  if (!file) {
     alert("Please upload an image.");
     return;
   }
 
-  const file = imageInput.files[0];
+  if (!file.type.startsWith("image/")) {
+    alert("The selected file is not an image.");
+    return;
+  }
+
+  const maxSizeMB = 5;
+  if (file.size > maxSizeMB * 1024 * 1024) {
+    alert(`File size exceeds ${maxSizeMB}MB.`);
+    return;
+  }
+
   const formData = new FormData();
   formData.append("file", file);
+
+  solveBtn.disabled = true;
+  solveBtn.textContent = "Solving...";
 
   fetch(`${API_BASE_URL}/solve`, {
     method: "POST",
@@ -88,10 +116,17 @@ solveBtn.addEventListener('click', () => {
       botMsg.innerHTML = `
         <strong>Predicted LaTeX:</strong> ${data.latex || "N/A"}<br/>
         <strong>Step-by-Step Solution:</strong>
-        <ol>${data.steps.map(s => `<li>${s.step || ""}<br/><code>${s.detail  || ""}</code></li>`).join('')}</ol>
+        <ol>${data.steps.map(s => `<li>${s.step || ""}<br/><code>${s.detail || ""}</code></li>`).join('')}</ol>
       `;
       chatSection.appendChild(botMsg);
       chatSection.scrollTop = chatSection.scrollHeight;
     })
-    .catch(err => alert("Failed to solve: " + err));
+    .catch(err => {
+      alert("Failed to solve: " + err);
+    })
+    .finally(() => {
+      // Re-enable button after request finishes
+      solveBtn.disabled = false;
+      solveBtn.textContent = "Solve";
+    });
 });
