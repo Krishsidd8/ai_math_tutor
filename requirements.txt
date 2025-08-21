@@ -6,3 +6,4 @@ pillow
 sympy
 gdown
 google-generativeai
+python-multipart
