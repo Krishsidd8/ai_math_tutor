@@ -147,7 +147,7 @@ def predict_image(img: Image.Image, max_len=60):
 # -------------------- CORS --------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://krishsidd8.github.io/ai_math_tutor/"],
+    allow_origins=["https://krishsidd8.github.io"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
