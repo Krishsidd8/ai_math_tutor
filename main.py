@@ -55,9 +55,10 @@ class OCRModel(nn.Module):
         B, _, h, w = imgs.shape
         enc = self.encoder(imgs).view(B, -1)
         enc = self.fc(enc).unsqueeze(1).transpose(0, 1)
-        tgt_emb = self.embedding(tgt)
+        tgt_emb = self.embedding(tgt).transpose(0, 1)
         out = self.transformer(enc, tgt_emb, tgt_mask=tgt_mask)
         return self.out(out)
+
 
 class LatexTokenizer:
     def __init__(self, vocab, specials):
