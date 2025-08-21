@@ -54,7 +54,7 @@ class OCRModel(nn.Module):
     def forward(self, imgs, tgt, tgt_mask=None):
         B, _, h, w = imgs.shape
         enc = self.encoder(imgs).view(B, -1)
-        enc = self.fc(enc).unsqueeze(0)
+        enc = self.fc(enc).unsqueeze(1).transpose(0, 1)
         tgt_emb = self.embedding(tgt)
         out = self.transformer(enc, tgt_emb, tgt_mask=tgt_mask)
         return self.out(out)
@@ -128,18 +128,13 @@ def predict_image(img: Image.Image, max_len=60):
         transforms.ToTensor()
     ])
     img_t = transform(img.convert("L")).unsqueeze(0)
-
     tgt = torch.tensor([[tokenizer.t2i['<SOS>']]], dtype=torch.long)
+
     for _ in range(max_len):
-        tgt_mask = torch.triu(torch.full((tgt.size(1), tgt.size(1)), float('-inf')), diagonal=1)
+        tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt.size(1)).to(img_t.device)
         logits = model(img_t, tgt, tgt_mask=tgt_mask)
-        
-        # Make sure next_token is 2D [1,1]
         next_token = logits[-1].argmax(dim=-1).view(1, 1)
-        
-        # Now shapes match for cat on dim=1
         tgt = torch.cat([tgt, next_token], dim=1)
-        
         if next_token.item() == tokenizer.t2i['<EOS>']:
             break
 
@@ -150,7 +145,7 @@ def predict_image(img: Image.Image, max_len=60):
 # -------------------- CORS --------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Consider restricting this in production
+    allow_origins=["https://krishsidd8.github.io/ai_math_tutor/"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
