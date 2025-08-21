@@ -128,13 +128,14 @@ def predict_image(img: Image.Image, max_len=60):
         transforms.ToTensor()
     ])
     img_t = transform(img.convert("L")).unsqueeze(0)
-    tgt = torch.tensor([[tokenizer.t2i['<SOS>']]], dtype=torch.long)
 
+    tgt = torch.tensor([[tokenizer.t2i['<SOS>']]], dtype=torch.long)
     for _ in range(max_len):
-        tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt.size(1)).to(img_t.device)
+        tgt_mask = torch.triu(torch.full((tgt.size(1), tgt.size(1)), float('-inf')), diagonal=1)
         logits = model(img_t, tgt, tgt_mask=tgt_mask)
         next_token = logits[-1].argmax(dim=-1).view(1, 1)
         tgt = torch.cat([tgt, next_token], dim=1)
+        
         if next_token.item() == tokenizer.t2i['<EOS>']:
             break
 
