@@ -142,11 +142,15 @@ try:
     tokenizer.specials = ckpt['specials']
     tokenizer.t2i = {tok: i for i, tok in enumerate(tokenizer.vocab)}
     tokenizer.i2t = {i: tok for tok, i in tokenizer.t2i.items()}
-    state_dict = ckpt['model']
     vocab_size = len(tokenizer.vocab)
     model = OCRSeq2Seq(vocab_size=vocab_size, d_model=512, nhead=8, num_layers=4, dim_ff=2048, dropout=0.1)
-    model.load_state_dict(ckpt['model'])
+    missing_keys, unexpected_keys = model.load_state_dict(ckpt['model'], strict=False)
+    if missing_keys or unexpected_keys:
+        logger.warning(f"Missing keys: {missing_keys}")
+        logger.warning(f"Unexpected keys: {unexpected_keys}")
     model.eval()
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model.to(device)
     logger.info("Model loaded and ready.")
 
 except Exception as e:
@@ -210,29 +214,39 @@ async def solve(file: UploadFile = File(...)):
         return {"error": str(e)}
 
 # -------------------- UNIFIED DECODER --------------------
-def decode_image_to_latex(img: Image.Image, model, tokenizer, max_len=60, device='cpu') -> str:
-    logger.info("Starting unified image-to-LaTeX decoding.")
+def decode_image_to_latex(img: Image.Image, model, tokenizer, max_len=200, beam_size=5, device='cpu') -> str:
+    """
+    Autoregressive decoding with optional beam search.
+    """
+    model.eval()
     transform = transforms.Compose([
         transforms.Resize((max_height, max_width)),
         transforms.ToTensor()
     ])
     img_t = transform(img).unsqueeze(0).to(device)
     memory = model.encoder(img_t)
-    logger.info(f"Encoder output shape: {memory.shape}")
-    tgt = torch.tensor([[tokenizer.t2i['<SOS>']]], dtype=torch.long, device=device)
+    beams = [(torch.tensor([tokenizer.t2i['<SOS>']], device=device), 0.0)]
     for step_idx in range(max_len):
-        tgt_emb = model.embedding(tgt) * math.sqrt(model.embedding.embedding_dim)
-        tgt_emb = model.positional_encoding(tgt_emb)
-        tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(device)
-        out = model.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
-        logits = model.fc_out(out)
-        next_token = logits[-1, 0].argmax(-1).view(1,1)
-        tgt = torch.cat([tgt, next_token], dim=0)  
-        logger.info(f"Step {step_idx+1}: predicted token {next_token.item()} ({tokenizer.i2t.get(next_token.item(),'UNK')})")
-        if next_token.item() == tokenizer.t2i['<EOS>']:
-            logger.info("EOS token encountered; stopping decoding.")
+        new_beams = []
+        for seq, score in beams:
+            tgt_emb = model.embedding(seq) * math.sqrt(model.embedding.embedding_dim)
+            tgt_emb = model.positional_encoding(tgt_emb)
+            tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(device)
+            out = model.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
+            logits = model.fc_out(out)
+            log_probs = F.log_softmax(logits[-1, 0], dim=-1)
+            topk_probs, topk_ids = log_probs.topk(beam_size)
+            for tok_id, tok_prob in zip(topk_ids.tolist(), topk_probs.tolist()):
+                new_seq = torch.cat([seq, torch.tensor([[tok_id]], device=device)], dim=0)
+                new_score = score + tok_prob
+                new_beams.append((new_seq, new_score))
+        beams = sorted(new_beams, key=lambda x: x[1], reverse=True)[:beam_size]
+        if all(seq[-1,0].item() == tokenizer.t2i['<EOS>'] for seq, _ in beams):
             break
-    result = tokenizer.decode(tgt[1:,0].tolist())
+
+    best_seq = beams[0][0]
+    tokens = [t.item() for t in best_seq[1:] if t.item() != tokenizer.t2i['<EOS>']]
+    result = tokenizer.decode(tokens)
     logger.info(f"Decoded LaTeX result: {result}")
     return result
 
