@@ -93,7 +93,7 @@ try:
     logger.info("Loading model checkpoint...")
     ckpt = torch.load(checkpoint_path, map_location="cpu")
     tokenizer = LatexTokenizer(ckpt['tokenizer_vocab'], ckpt['specials'])
-    model = OCRModel(len(tokenizer.vocab))
+    model = OCRSeq2Seq(len(tokenizer.vocab))
     model.load_state_dict(ckpt['model'])
     model.eval()
     logger.info("Model loaded and ready.")
