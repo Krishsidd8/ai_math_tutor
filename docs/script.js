@@ -103,7 +103,11 @@ imageInput.addEventListener('change', async (event) => {
   };
   reader.readAsDataURL(file);
 
-  spinnerMsg = addBotMessage(`<div class="loading-spinner"></div>`);
+  spinnerMsg = addBotMessage(`
+  <div class="loader-container">
+    <div class="loader"></div>
+  </div>
+`);
 
   const formData = new FormData();
   formData.append("file", file);
