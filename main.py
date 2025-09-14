@@ -228,13 +228,22 @@ def predict_image(img: Image.Image, max_len=60, device='cpu'):
     img_t = transform(img.convert("L")).unsqueeze(0).to(device)
     logger.info(f"Image transformed to tensor of shape {img_t.shape}")
 
+    memory = model.encoder(img_t.repeat(1,3,1,1))
+    memory = model.proj(memory).permute(0,2,3,1).view(1,-1,model.d_model).permute(1,0,2)
+    logger.info(f"Encoder output shape: {memory.shape}")
+
     tgt = torch.tensor([[tokenizer.t2i['<SOS>']]], dtype=torch.long, device=device)
     logger.info(f"Initial target sequence: {tgt}")
 
     for step_idx in range(max_len):
         logger.info(f"Prediction step {step_idx+1}")
-        logits = model(img_t, tgt)
-        next_token = logits[-1, 0].argmax(dim=-1).view(1, 1)
+        
+        tgt_emb = model.embedding(tgt) * math.sqrt(model.fc_out.in_features)
+        tgt_emb = model.positional_encoding(tgt_emb)
+        tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(device)
+        out = model.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
+        logits = model.fc_out(out)
+        next_token = logits[-1,0].argmax(-1).view(1,1)
         tgt = torch.cat([tgt, next_token], dim=1)
         logger.info(f"Next token predicted: {next_token.item()} ({tokenizer.i2t.get(next_token.item(), 'UNK')})")
         
@@ -259,6 +268,8 @@ def predict_greedy(img, model, tokenizer, max_len=200, device='cpu'):
             logger.info(f"Image transformed for greedy prediction: {img.shape}")
 
         memory = model.encoder(img.repeat(1,3,1,1))
+        memory = model.proj(memory).permute(0,2,3,1).view(1,-1,model.d_model).permute(1,0,2)
+
         logger.info(f"Encoder output shape: {memory.shape}")
 
         cur_seq = torch.tensor([[tokenizer.t2i['<SOS>']]], device=device)
