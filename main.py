@@ -128,14 +128,14 @@ async def predict(file: UploadFile = File(...)):
     logger.info("Received /predict request.")
     try:
         img = Image.open(file.file).convert("L")
-        result = predict_greedy(img, model, tokenizer)
-        logger.info(f"Prediction result: {result}")
+        logger.info(f"Opened image with size {img.size}")
+        result = predict_image(img)
+        logger.info(f"Prediction completed: {result}")
         return {"latex": result}
     except Exception as e:
         logger.error("Error during prediction:")
         logger.error(traceback.format_exc())
         return {"error": str(e)}
-
 
 @app.post("/solve")
 async def solve(file: UploadFile = File(...)):
