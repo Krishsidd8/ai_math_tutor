@@ -136,6 +136,7 @@ async def predict(file: UploadFile = File(...)):
         logger.error(traceback.format_exc())
         return {"error": str(e)}
 
+
 @app.post("/solve")
 async def solve(file: UploadFile = File(...)):
     logger.info("Received /solve request.")
@@ -197,12 +198,12 @@ def predict_image(img: Image.Image, max_len=60, device='cpu'):
     logger.info(f"Initial target sequence: {tgt}")
 
     for step_idx in range(max_len):
-        logger.debug(f"Prediction step {step_idx+1}")
+        logger.info(f"Prediction step {step_idx+1}")
         tgt_mask = torch.triu(torch.full((tgt.size(1), tgt.size(1)), float('-inf')), diagonal=1).to(device)
         logits = model(img_t, tgt, tgt_mask=tgt_mask)
         next_token = logits[-1].argmax(dim=-1).unsqueeze(0)
         tgt = torch.cat([tgt, next_token], dim=1)
-        logger.debug(f"Next token predicted: {next_token.item()} ({tokenizer.i2t.get(next_token.item(), 'UNK')})")
+        logger.info(f"Next token predicted: {next_token.item()} ({tokenizer.i2t.get(next_token.item(), 'UNK')})")
         
         if next_token.item() == tokenizer.t2i['<EOS>']:
             logger.info("EOS token encountered; stopping prediction.")
@@ -239,7 +240,7 @@ def predict_greedy(img, model, tokenizer, max_len=200, device='cpu'):
             out = model.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
             logits = model.fc_out(out)
             next_tok = logits[-1,0].argmax(-1).unsqueeze(0).unsqueeze(0)
-            logger.debug(f"Step {step_idx+1}: predicted token {next_tok.item()} ({tokenizer.i2t.get(next_tok.item(),'UNK')})")
+            logger.info(f"Step {step_idx+1}: predicted token {next_tok.item()} ({tokenizer.i2t.get(next_tok.item(),'UNK')})")
             if next_tok.item() == tokenizer.t2i['<EOS>']:
                 logger.info("EOS token encountered; stopping greedy decoding.")
                 break
