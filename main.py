@@ -97,8 +97,7 @@ try:
     for k, v in ckpt.items():
         new_key = k.replace("encoder.cnn", "encoder").replace("encoder.proj", "proj")
         new_ckpt[new_key] = v
-    tokenizer = LatexTokenizer(ckpt['tokenizer_vocab'], ckpt['specials'])
-    model = OCRSeq2Seq(len(tokenizer.vocab))
+    model = OCRSeq2Seq(vocab_size=YOUR_TOKENIZER_VOCAB_SIZE)
     model.load_state_dict(new_ckpt)
     model.eval()
     logger.info("Model loaded and ready.")
