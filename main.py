@@ -101,7 +101,8 @@ class EncoderResNet(nn.Module):
         self.pe2d = None
 
     def forward(self, x):
-        x = x.repeat(1, 3, 1, 1)
+        if x.size(1) == 1:
+            x = x.repeat(1, 3, 1, 1)
         feats = self.cnn(x)
         feats = self.proj(feats)
         B, C, H, W = feats.size()
@@ -225,11 +226,10 @@ def predict_image(img: Image.Image, max_len=60, device='cpu'):
         transforms.Resize((max_height, max_width)),
         transforms.ToTensor()
     ])
-    img_t = transform(img.convert("L")).unsqueeze(0).to(device)
+    img_t = transform(img).unsqueeze(0).to(device)
     logger.info(f"Image transformed to tensor of shape {img_t.shape}")
 
-    memory = model.encoder(img_t.repeat(1,3,1,1))
-    memory = model.proj(memory).permute(0,2,3,1).view(1,-1,model.d_model).permute(1,0,2)
+    memory = model.encoder(img_t)
     logger.info(f"Encoder output shape: {memory.shape}")
 
     tgt = torch.tensor([[tokenizer.t2i['<SOS>']]], dtype=torch.long, device=device)
@@ -237,16 +237,16 @@ def predict_image(img: Image.Image, max_len=60, device='cpu'):
 
     for step_idx in range(max_len):
         logger.info(f"Prediction step {step_idx+1}")
-        
+
         tgt_emb = model.embedding(tgt) * math.sqrt(model.fc_out.in_features)
         tgt_emb = model.positional_encoding(tgt_emb)
         tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(device)
         out = model.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
         logits = model.fc_out(out)
-        next_token = logits[-1,0].argmax(-1).view(1,1)
+        next_token = logits[-1, 0].argmax(-1).view(1,1)
         tgt = torch.cat([tgt, next_token], dim=1)
         logger.info(f"Next token predicted: {next_token.item()} ({tokenizer.i2t.get(next_token.item(), 'UNK')})")
-        
+
         if next_token.item() == tokenizer.t2i['<EOS>']:
             logger.info("EOS token encountered; stopping prediction.")
             break
@@ -254,6 +254,7 @@ def predict_image(img: Image.Image, max_len=60, device='cpu'):
     result = tokenizer.decode(tgt.squeeze().tolist())
     logger.info(f"Decoded LaTeX result: {result}")
     return result
+
 
 def predict_greedy(img, model, tokenizer, max_len=200, device='cpu'):
     logger.info("Starting greedy prediction pipeline...")
@@ -267,9 +268,7 @@ def predict_greedy(img, model, tokenizer, max_len=200, device='cpu'):
             img = transform(img).unsqueeze(0).to(device)
             logger.info(f"Image transformed for greedy prediction: {img.shape}")
 
-        memory = model.encoder(img.repeat(1,3,1,1))
-        memory = model.proj(memory).permute(0,2,3,1).view(1,-1,model.d_model).permute(1,0,2)
-
+        memory = model.encoder(img)
         logger.info(f"Encoder output shape: {memory.shape}")
 
         cur_seq = torch.tensor([[tokenizer.t2i['<SOS>']]], device=device)
