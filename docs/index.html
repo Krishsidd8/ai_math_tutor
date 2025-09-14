@@ -5,13 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>AI Math Tutor</title>
   <link rel="stylesheet" href="style.css" />
+  <script>
+    window.MathJax = {
+      tex: { inlineMath: [['$', '$'], ['\\(', '\\)']] },
+      svg: { fontCache: 'global' }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
 </head>
 <body>
   <header>
     <div class="banner-left">
       <img src="Images/AI MATH TUTOR-LOGO.svg" alt="Logo" class="logo" />
       <div class="title-group">
-        <h1>AI Math Tutor</h1>
+        <h1>Math Tutor AI</h1>
         <p class="subheader">SNAP. UPLOAD. UNDERSTAND.</p>
       </div>
     </div>
@@ -26,12 +33,20 @@
         <input type="file" id="imageInput" accept="image/*" hidden />
       </div>
       <div id="imagePreviewContainer"></div>
-      <button id="solveBtn">Solve Problem</button>
+
+      <div id="loadingSpinner" class="spinner" style="display: none;"></div>
+
+      <div id="equationPreviewContainer" style="display: none;">
+        <h3>Predicted Equation (Preview):</h3>
+        <div id="equationPreview"></div>
+      </div>
+
+      <button id="solveBtn" style="display: none;">Solve Problem</button>
     </section>
     
     <section class="chat-section" id="chatSection">
       <div class="chat-message bot">
-        Hi, Upload a math problem and I’ll help you solve it.
+        Hi, Upload a handwritten math problem and I’ll help you solve it.
       </div>
     </section>
   </main>

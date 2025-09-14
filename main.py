@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision import transforms
 from PIL import Image
 from fastapi import FastAPI, File, UploadFile
@@ -9,6 +10,7 @@ import gdown
 import google.generativeai as genai
 from sympy import sympify, simplify
 from fastapi.middleware.cors import CORSMiddleware
+import math
 
 # -------------------- LOGGING CONFIG --------------------
 logging.basicConfig(
@@ -34,41 +36,57 @@ if not os.path.exists(checkpoint_path):
         logger.error(f"Failed to download checkpoint: {e}")
         raise
 
-# -------------------- MODEL CLASSES --------------------
-class OCRModel(nn.Module):
-    def __init__(self, vocab_size, hidden_dim=256):
-        super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv2d(1, 32, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
-        )
-        conv_out = 64 * (max_height // 4) * (max_width // 4)
-        self.fc = nn.Linear(conv_out, hidden_dim)
-        self.embedding = nn.Embedding(vocab_size, hidden_dim)
-        self.transformer = nn.Transformer(
-            d_model=hidden_dim, nhead=4,
-            num_encoder_layers=3, num_decoder_layers=3
-        )
-        self.out = nn.Linear(hidden_dim, vocab_size)
-
-    def forward(self, imgs, tgt, tgt_mask=None):
-        B, _, h, w = imgs.shape
-        enc = self.encoder(imgs).view(B, -1)
-        enc = self.fc(enc).unsqueeze(1).transpose(0, 1)
-        tgt_emb = self.embedding(tgt).transpose(0, 1)
-        out = self.transformer(enc, tgt_emb, tgt_mask=tgt_mask)
-        return self.out(out)
-
-
+# -------------------- TOKENIZER --------------------
 class LatexTokenizer:
-    def __init__(self, vocab, specials):
-        self.specials = specials
-        self.vocab = vocab
-        self.t2i = {tok: i for i, tok in enumerate(self.vocab)}
-        self.i2t = {i: tok for tok, i in self.t2i.items()}
+    def __init__(self, vocab=None, specials=None):
+        self.specials = specials or ['<PAD>', '<SOS>', '<EOS>', '<UNK>']
+        self.vocab = vocab or []
+        self.t2i = {tok: i for i, tok in enumerate(self.vocab)} if self.vocab else {}
+        self.i2t = {i: tok for tok, i in self.t2i.items()} if self.vocab else {}
 
     def decode(self, ids):
         return ' '.join(self.i2t[i] for i in ids if self.i2t[i] not in self.specials)
+
+# -------------------- MODEL --------------------
+class PositionalEncoding1D(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0)]
+        return x
+
+class OCRSeq2Seq(nn.Module):
+    def __init__(self, vocab_size, d_model=512, nhead=8, num_layers=4, dim_ff=2048, dropout=0.1):
+        super().__init__()
+        from torchvision.models import resnet18
+        self.encoder = nn.Sequential(*list(resnet18(weights="IMAGENET1K_V1").children())[:-2])
+        self.proj = nn.Conv2d(512, d_model, kernel_size=1)
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.positional_encoding = PositionalEncoding1D(d_model)
+        decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_ff, dropout=dropout, batch_first=False)
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
+        self.fc_out = nn.Linear(d_model, vocab_size)
+        self.d_model = d_model
+
+    def forward(self, imgs, tgt):
+        B, _, H, W = imgs.shape
+        x = imgs.repeat(1,3,1,1)
+        feats = self.encoder(x)
+        feats = self.proj(feats)
+        feats = feats.permute(0,2,3,1).view(B, -1, self.d_model).permute(1,0,2)
+        tgt_emb = self.embedding(tgt) * math.sqrt(self.d_model)
+        tgt_emb = self.positional_encoding(tgt_emb)
+        tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(tgt.device)
+        out = self.decoder(tgt_emb, feats, tgt_mask=tgt_mask)
+        return self.fc_out(out)
 
 # -------------------- LOAD MODEL --------------------
 try:
@@ -92,13 +110,34 @@ async def predict(file: UploadFile = File(...)):
     logger.info("Received /predict request.")
     try:
         img = Image.open(file.file).convert("L")
-        result = predict_image(img)
+        result = predict_greedy(img, model, tokenizer)
         logger.info(f"Prediction result: {result}")
         return {"latex": result}
     except Exception as e:
         logger.error("Error during prediction:")
         logger.error(traceback.format_exc())
         return {"error": str(e)}
+
+def predict_greedy(img, model, tokenizer, max_len=200, device='cpu'):
+    model.eval()
+    with torch.no_grad():
+        if isinstance(img, Image.Image):
+            transform = transforms.Compose([transforms.Resize((384,512)), transforms.ToTensor()])
+            img = transform(img).unsqueeze(0).to(device)
+        memory = model.encoder(img.repeat(1,3,1,1))
+        memory = model.proj(memory).permute(0,2,3,1).view(1,-1,model.d_model).permute(1,0,2)
+        cur_seq = torch.tensor([[tokenizer.t2i['<SOS>']]], device=device)
+        for _ in range(max_len):
+            tgt_emb = model.embedding(cur_seq) * math.sqrt(model.d_model)
+            tgt_emb = model.positional_encoding(tgt_emb)
+            tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(cur_seq.device)
+            out = model.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
+            logits = model.fc_out(out)
+            next_tok = logits[-1,0].argmax(-1).unsqueeze(0).unsqueeze(0)
+            if next_tok.item() == tokenizer.t2i['<EOS>']:
+                break
+            cur_seq = torch.cat([cur_seq, next_tok], dim=0)
+        return tokenizer.decode(cur_seq[1:].squeeze().tolist())
 
 @app.post("/solve")
 async def solve(file: UploadFile = File(...)):
@@ -109,15 +148,40 @@ async def solve(file: UploadFile = File(...)):
         latex = predict_image(img) or ""
         logger.info(f"Predicted LaTeX: {latex}")
 
-        steps = solve_with_gemini(latex)
-        if not steps:
-            logger.warning("Gemini returned no steps. Falling back to SymPy.")
-            steps = quick_sympy_steps(latex)
+        steps = []
+        if latex:
+            try:
+                steps = solve_with_gemini(latex)
+            except Exception as e:
+                logger.warning("Gemini solver failed (possibly quota exceeded): %s", e)
+                if note:
+                    note += " "
+                note += "Gemini solver unavailable (quota may be exceeded)."
 
-        logger.info(f"Steps returned: {len(steps)}")
-        return {"latex": latex, "steps": steps}
+        if not steps:
+            logger.info("Falling back to SymPy for solution steps.")
+            steps = quick_sympy_steps(latex)
+            if not note:
+                note = "SymPy fallback used."
+
+        def render_latex_mathjax(latex_code: str, display_mode: bool = True) -> str:
+            """Wrap LaTeX in MathJax delimiters for HTML rendering."""
+            if not latex_code.strip():
+                return ""
+            return f"$${latex_code}$$" if display_mode else f"${latex_code}$"
+
+        for step in steps:
+            step["mathjax"] = render_latex_mathjax(step.get("detail", ""), display_mode=True)
+
+        response = {"latex": latex, "steps": steps}
+        if note:
+            response["note"] = note
+
+        logger.info(f"Returning {len(steps)} steps with MathJax rendering.")
+        return response
+    
     except Exception as e:
-        logger.error("Error during solve:")
+        logger.error("Error during /solve processing:")
         logger.error(traceback.format_exc())
         return {"error": str(e)}
 
@@ -154,7 +218,7 @@ app.add_middleware(
 
 # -------------------- GEMINI SETUP --------------------
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-GEMINI_MODEL = genai.GenerativeModel("gemini-2.5-flash")
+GEMINI_MODEL = genai.GenerativeModel("gemini-2.5-pro")
 
 STEP_SCHEMA = {
     "type": "object",
@@ -174,38 +238,37 @@ STEP_SCHEMA = {
     "required": ["steps"]
 }
 
+# -------------------- SOLVER --------------------
 def solve_with_gemini(latex_expr: str) -> list[dict]:
     logger.info("Calling Gemini for step-by-step solution...")
     prompt = (
-        "You are a math tutor. Given a math expression or equation in LaTeX, "
+        "You are a math tutor. Given a math expression in LaTeX, "
         "produce a clear, correct, step-by-step solution. "
-        "Only return JSON that matches the provided schema. "
-        "Avoid extra commentary. Keep steps concise but correct.\n\n"
+        "Return only JSON matching the schema. "
         f"LaTeX: {latex_expr}"
     )
     try:
-        resp = GEMINI_MODEL.generate_content(
+        response = GEMINI_MODEL.generate_content(
             [prompt],
             generation_config={
+                "temperature": 0.2,
                 "response_mime_type": "application/json",
                 "response_schema": STEP_SCHEMA,
-                "temperature": 0.2,
             },
         )
-        data = json.loads(resp.text)
+        data = json.loads(response.text)
         steps = data.get("steps", [])
-        logger.info("Gemini returned valid response.")
-        return [
-            {"step": s.get("step", ""), "detail": s.get("detail", "")}
-            for s in steps if isinstance(s, dict)
-        ]
+        return [{"step": s.get("step", ""), "detail": s.get("detail", "")} for s in steps if isinstance(s, dict)]
     except Exception as e:
-        logger.error("Gemini call failed:")
+        logger.error("Gemini solve failed:")
         logger.error(traceback.format_exc())
         return [{"step": "AI solver unavailable", "detail": str(e)}]
 
 def quick_sympy_steps(latex_expr: str) -> list[dict]:
     logger.info("Attempting fallback using SymPy...")
+    if not latex_expr.strip():
+        logger.warning("Empty LaTeX input; cannot use SymPy.")
+        return [{"step": "No input available", "detail": "Cannot parse empty LaTeX expression."}]
     try:
         if "=" in latex_expr:
             lhs_txt, rhs_txt = latex_expr.split("=", 1)
@@ -215,10 +278,9 @@ def quick_sympy_steps(latex_expr: str) -> list[dict]:
             expr = sympify(latex_expr)
 
         simp = simplify(expr)
-        logger.info("SymPy simplification successful.")
         return [
             {"step": "Parse LaTeX", "detail": str(expr)},
-            {"step": "Simplify",   "detail": str(simp)},
+            {"step": "Simplify", "detail": str(simp)},
         ]
     except Exception as e:
         logger.error("SymPy simplification failed:")
