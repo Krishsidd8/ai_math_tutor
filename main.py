@@ -92,13 +92,16 @@ class OCRSeq2Seq(nn.Module):
 # -------------------- LOAD MODEL --------------------
 try:
     logger.info("Loading model checkpoint...")
-    ckpt = torch.load("ocr_checkpoint.pt", map_location="cpu")['model']
-    new_ckpt = {}
-    for k, v in ckpt.items():
-        new_key = k.replace("encoder.cnn", "encoder").replace("encoder.proj", "proj")
-        new_ckpt[new_key] = v
-    model = OCRSeq2Seq(vocab_size=YOUR_TOKENIZER_VOCAB_SIZE)
-    model.load_state_dict(new_ckpt)
+    ckpt = torch.load("ocr_checkpoint.pt", map_location="cpu")
+    print(ckpt.keys())
+    tokenizer = LatexTokenizer()
+    tokenizer.vocab = ckpt['tokenizer_vocab']
+    tokenizer.specials = ckpt['specials']
+    tokenizer.t2i = {tok: i for i, tok in enumerate(tokenizer.vocab)}
+    tokenizer.i2t = {i: tok for tok, i in tokenizer.t2i.items()}
+
+    model = OCRSeq2Seq(len(tokenizer.vocab))
+    model.load_state_dict(ckpt['model'])
     model.eval()
     logger.info("Model loaded and ready.")
 
