@@ -11,6 +11,7 @@ import google.generativeai as genai
 from sympy import sympify, simplify
 from fastapi.middleware.cors import CORSMiddleware
 import math
+import traceback
 
 # -------------------- LOGGING CONFIG --------------------
 logging.basicConfig(
@@ -91,17 +92,17 @@ class OCRSeq2Seq(nn.Module):
 # -------------------- LOAD MODEL --------------------
 try:
     logger.info("Loading model checkpoint...")
-    full_ckpt = torch.load("ocr_checkpoint.pt", map_location="cpu")
-    ckpt = full_ckpt['model']
+    ckpt = torch.load("ocr_checkpoint.pt", map_location="cpu")['model']
     new_ckpt = {}
     for k, v in ckpt.items():
-        new_key = k.replace("encoder.cnn", "encoder")
+        new_key = k.replace("encoder.cnn", "encoder").replace("encoder.proj", "proj")
         new_ckpt[new_key] = v
-    tokenizer = LatexTokenizer(full_ckpt['tokenizer_vocab'], full_ckpt['specials'])
+    tokenizer = LatexTokenizer(ckpt['tokenizer_vocab'], ckpt['specials'])
     model = OCRSeq2Seq(len(tokenizer.vocab))
     model.load_state_dict(new_ckpt)
     model.eval()
     logger.info("Model loaded and ready.")
+
 except Exception as e:
     logger.error("Failed to load model checkpoint:")
     logger.error(traceback.format_exc())
