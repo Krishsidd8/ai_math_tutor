@@ -94,13 +94,11 @@ try:
     logger.info("Loading model checkpoint...")
     ckpt = torch.load(checkpoint_path, map_location="cpu")
     print(ckpt.keys())
-
     tokenizer = LatexTokenizer()
     tokenizer.vocab = ckpt['tokenizer_vocab']
     tokenizer.specials = ckpt['specials']
     tokenizer.t2i = {tok: i for i, tok in enumerate(tokenizer.vocab)}
     tokenizer.i2t = {i: tok for tok, i in tokenizer.t2i.items()}
-
     state_dict = ckpt['model']
     new_state_dict = {}
     for k, v in state_dict.items():
@@ -109,7 +107,8 @@ try:
         else:
             new_key = k
         new_state_dict[new_key] = v
-
+    vocab_size = len(tokenizer.vocab)
+    model = OCRSeq2Seq(vocab_size=vocab_size, d_model=512, nhead=8, num_layers=4, dim_ff=2048, dropout=0.1)
     model.load_state_dict(new_state_dict)
     model.eval()
     logger.info("Model loaded and ready.")
