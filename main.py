@@ -120,10 +120,6 @@ except Exception as e:
     logger.error(traceback.format_exc())
     raise
 
-
-
-
-
 # -------------------- FASTAPI APP --------------------
 app = FastAPI()
 
@@ -139,27 +135,6 @@ async def predict(file: UploadFile = File(...)):
         logger.error("Error during prediction:")
         logger.error(traceback.format_exc())
         return {"error": str(e)}
-
-def predict_greedy(img, model, tokenizer, max_len=200, device='cpu'):
-    model.eval()
-    with torch.no_grad():
-        if isinstance(img, Image.Image):
-            transform = transforms.Compose([transforms.Resize((384,512)), transforms.ToTensor()])
-            img = transform(img).unsqueeze(0).to(device)
-        memory = model.encoder(img.repeat(1,3,1,1))
-        memory = model.proj(memory).permute(0,2,3,1).view(1,-1,model.d_model).permute(1,0,2)
-        cur_seq = torch.tensor([[tokenizer.t2i['<SOS>']]], device=device)
-        for _ in range(max_len):
-            tgt_emb = model.embedding(cur_seq) * math.sqrt(model.d_model)
-            tgt_emb = model.positional_encoding(tgt_emb)
-            tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(cur_seq.device)
-            out = model.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
-            logits = model.fc_out(out)
-            next_tok = logits[-1,0].argmax(-1).unsqueeze(0).unsqueeze(0)
-            if next_tok.item() == tokenizer.t2i['<EOS>']:
-                break
-            cur_seq = torch.cat([cur_seq, next_tok], dim=0)
-        return tokenizer.decode(cur_seq[1:].squeeze().tolist())
 
 @app.post("/solve")
 async def solve(file: UploadFile = File(...)):
@@ -208,27 +183,71 @@ async def solve(file: UploadFile = File(...)):
         return {"error": str(e)}
 
 # -------------------- IMAGE TO LATEX --------------------
-def predict_image(img: Image.Image, max_len=60):
+def predict_image(img: Image.Image, max_len=60, device='cpu'):
     logger.info("Starting image prediction...")
+    
     transform = transforms.Compose([
         transforms.Resize((max_height, max_width)),
         transforms.ToTensor()
     ])
-    img_t = transform(img.convert("L")).unsqueeze(0)
+    img_t = transform(img.convert("L")).unsqueeze(0).to(device)
+    logger.info(f"Image transformed to tensor of shape {img_t.shape}")
 
-    tgt = torch.tensor([[tokenizer.t2i['<SOS>']]], dtype=torch.long)
-    for _ in range(max_len):
-        tgt_mask = torch.triu(torch.full((tgt.size(1), tgt.size(1)), float('-inf')), diagonal=1)
+    tgt = torch.tensor([[tokenizer.t2i['<SOS>']]], dtype=torch.long, device=device)
+    logger.info(f"Initial target sequence: {tgt}")
+
+    for step_idx in range(max_len):
+        logger.debug(f"Prediction step {step_idx+1}")
+        tgt_mask = torch.triu(torch.full((tgt.size(1), tgt.size(1)), float('-inf')), diagonal=1).to(device)
         logits = model(img_t, tgt, tgt_mask=tgt_mask)
         next_token = logits[-1].argmax(dim=-1).unsqueeze(0)
         tgt = torch.cat([tgt, next_token], dim=1)
+        logger.debug(f"Next token predicted: {next_token.item()} ({tokenizer.i2t.get(next_token.item(), 'UNK')})")
         
         if next_token.item() == tokenizer.t2i['<EOS>']:
+            logger.info("EOS token encountered; stopping prediction.")
             break
 
     result = tokenizer.decode(tgt.squeeze().tolist())
-    logger.info(f"Decoded result: {result}")
+    logger.info(f"Decoded LaTeX result: {result}")
     return result
+
+
+def predict_greedy(img, model, tokenizer, max_len=200, device='cpu'):
+    logger.info("Starting greedy prediction pipeline...")
+    model.eval()
+    with torch.no_grad():
+        if isinstance(img, Image.Image):
+            transform = transforms.Compose([
+                transforms.Resize((384,512)),
+                transforms.ToTensor()
+            ])
+            img = transform(img).unsqueeze(0).to(device)
+            logger.info(f"Image transformed for greedy prediction: {img.shape}")
+
+        memory = model.encoder(img.repeat(1,3,1,1))
+        logger.info(f"Encoder output shape: {memory.shape}")
+
+        memory = model.proj(memory).permute(0,2,3,1).view(1,-1,model.d_model).permute(1,0,2)
+        logger.info(f"Projected memory shape: {memory.shape}")
+
+        cur_seq = torch.tensor([[tokenizer.t2i['<SOS>']]], device=device)
+        for step_idx in range(max_len):
+            tgt_emb = model.embedding(cur_seq) * math.sqrt(model.d_model)
+            tgt_emb = model.positional_encoding(tgt_emb)
+            tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(cur_seq.device)
+            out = model.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
+            logits = model.fc_out(out)
+            next_tok = logits[-1,0].argmax(-1).unsqueeze(0).unsqueeze(0)
+            logger.debug(f"Step {step_idx+1}: predicted token {next_tok.item()} ({tokenizer.i2t.get(next_tok.item(),'UNK')})")
+            if next_tok.item() == tokenizer.t2i['<EOS>']:
+                logger.info("EOS token encountered; stopping greedy decoding.")
+                break
+            cur_seq = torch.cat([cur_seq, next_tok], dim=0)
+
+        result = tokenizer.decode(cur_seq[1:].squeeze().tolist())
+        logger.info(f"Greedy decoded LaTeX result: {result}")
+        return result
 
 # -------------------- CORS --------------------
 app.add_middleware(
