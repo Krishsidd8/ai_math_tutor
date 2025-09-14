@@ -163,11 +163,11 @@ async def predict(file: UploadFile = File(...)):
     try:
         img = Image.open(file.file).convert("L")
         logger.info(f"Opened image with size {img.size}")
-        result = predict_image(img)
-        logger.info(f"Prediction completed: {result}")
-        return {"latex": result}
+        latex = decode_image_to_latex(img, model, tokenizer)
+        logger.info(f"Prediction completed: {latex}")
+        return {"latex": latex}
     except Exception as e:
-        logger.error("Error during prediction:")
+        logger.error("Error during /predict:")
         logger.error(traceback.format_exc())
         return {"error": str(e)}
 
@@ -178,120 +178,70 @@ async def solve(file: UploadFile = File(...)):
     try:
         contents = await file.read()
         img = Image.open(io.BytesIO(contents))
-        latex = predict_image(img) or ""
+        latex = decode_image_to_latex(img, model, tokenizer) or ""
         logger.info(f"Predicted LaTeX: {latex}")
-
         steps = []
         if latex:
             try:
                 steps = solve_with_gemini(latex)
             except Exception as e:
-                logger.warning("Gemini solver failed (possibly quota exceeded): %s", e)
-                if note:
-                    note += " "
+                logger.warning("Gemini solver failed: %s", e)
                 note += "Gemini solver unavailable (quota may be exceeded)."
-
         if not steps:
             logger.info("Falling back to SymPy for solution steps.")
             steps = quick_sympy_steps(latex)
             if not note:
                 note = "SymPy fallback used."
-
-        def render_latex_mathjax(latex_code: str, display_mode: bool = True) -> str:
-            """Wrap LaTeX in MathJax delimiters for HTML rendering."""
+        def render_latex_mathjax(latex_code: str, display_mode=True) -> str:
             if not latex_code.strip():
                 return ""
             return f"$${latex_code}$$" if display_mode else f"${latex_code}$"
-
         for step in steps:
             step["mathjax"] = render_latex_mathjax(step.get("detail", ""), display_mode=True)
-
         response = {"latex": latex, "steps": steps}
         if note:
             response["note"] = note
-
         logger.info(f"Returning {len(steps)} steps with MathJax rendering.")
         return response
-    
+
     except Exception as e:
-        logger.error("Error during /solve processing:")
+        logger.error("Error during /solve:")
         logger.error(traceback.format_exc())
         return {"error": str(e)}
 
-# -------------------- IMAGE TO LATEX --------------------
-def predict_image(img: Image.Image, max_len=60, device='cpu'):
-    logger.info("Starting image prediction...")
-    
+# -------------------- UNIFIED DECODER --------------------
+def decode_image_to_latex(img: Image.Image, model, tokenizer, max_len=60, device='cpu') -> str:
+    logger.info("Starting unified image-to-LaTeX decoding.")
     transform = transforms.Compose([
         transforms.Resize((max_height, max_width)),
         transforms.ToTensor()
     ])
     img_t = transform(img).unsqueeze(0).to(device)
-    logger.info(f"Image transformed to tensor of shape {img_t.shape}")
-
     memory = model.encoder(img_t)
     logger.info(f"Encoder output shape: {memory.shape}")
-
     tgt = torch.tensor([[tokenizer.t2i['<SOS>']]], dtype=torch.long, device=device)
-    logger.info(f"Initial target sequence: {tgt}")
-
     for step_idx in range(max_len):
-        logger.info(f"Prediction step {step_idx+1}")
-
-        tgt_emb = model.embedding(tgt) * math.sqrt(model.fc_out.in_features)
+        tgt_emb = model.embedding(tgt) * math.sqrt(model.embedding.embedding_dim)
         tgt_emb = model.positional_encoding(tgt_emb)
         tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(device)
         out = model.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
         logits = model.fc_out(out)
         next_token = logits[-1, 0].argmax(-1).view(1,1)
-        tgt = torch.cat([tgt, next_token], dim=1)
-        logger.info(f"Next token predicted: {next_token.item()} ({tokenizer.i2t.get(next_token.item(), 'UNK')})")
-
+        tgt = torch.cat([tgt, next_token], dim=0)  
+        logger.info(f"Step {step_idx+1}: predicted token {next_token.item()} ({tokenizer.i2t.get(next_token.item(),'UNK')})")
         if next_token.item() == tokenizer.t2i['<EOS>']:
-            logger.info("EOS token encountered; stopping prediction.")
+            logger.info("EOS token encountered; stopping decoding.")
             break
-
-    result = tokenizer.decode(tgt.squeeze().tolist())
+    result = tokenizer.decode(tgt[1:,0].tolist())
     logger.info(f"Decoded LaTeX result: {result}")
     return result
 
+# -------------------- IMAGE TO LATEX --------------------
+def predict_image(img: Image.Image, max_len=60, device='cpu'):
+    return decode_image_to_latex(img, model, tokenizer, max_len=max_len, device=device)
 
 def predict_greedy(img, model, tokenizer, max_len=200, device='cpu'):
-    logger.info("Starting greedy prediction pipeline...")
-    model.eval()
-    with torch.no_grad():
-        if isinstance(img, Image.Image):
-            transform = transforms.Compose([
-                transforms.Resize((384,512)),
-                transforms.ToTensor()
-            ])
-            img = transform(img).unsqueeze(0).to(device)
-            logger.info(f"Image transformed for greedy prediction: {img.shape}")
-
-        memory = model.encoder(img)
-        logger.info(f"Encoder output shape: {memory.shape}")
-
-        cur_seq = torch.tensor([[tokenizer.t2i['<SOS>']]], device=device)
-
-        for step_idx in range(max_len):
-            tgt_emb = model.embedding(cur_seq) * math.sqrt(model.fc_out.in_features)
-            tgt_emb = model.positional_encoding(tgt_emb)
-            tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(cur_seq.device)
-            out = model.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
-            logits = model.fc_out(out)
-            next_tok = logits[-1,0].argmax(-1).view(1,1)
-
-            logger.info(f"Step {step_idx+1}: predicted token {next_tok.item()} ({tokenizer.i2t.get(next_tok.item(),'UNK')})")
-
-            cur_seq = torch.cat([cur_seq, next_tok], dim=0)
-
-            if next_tok.item() == tokenizer.t2i['<EOS>']:
-                logger.info("EOS token encountered; stopping greedy decoding.")
-                break
-
-        result = tokenizer.decode(cur_seq[1:,0].tolist())
-        logger.info(f"Greedy decoded LaTeX result: {result}")
-        return result
+    return decode_image_to_latex(img, model, tokenizer, max_len=max_len, device=device)
 
 # -------------------- CORS --------------------
 app.add_middleware(
