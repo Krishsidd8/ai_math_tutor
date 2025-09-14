@@ -1,4 +1,4 @@
-const API_BASE_URL = 'https://aimathtutorgemini-production.up.railway.app';
+const API_BASE_URL = 'https://aimathtutor-production.up.railway.app';
 
 const darkModeToggle = document.getElementById('darkModeToggle');
 const body = document.body;
