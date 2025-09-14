@@ -104,6 +104,8 @@ try:
     for k, v in state_dict.items():
         if k.startswith("encoder.cnn."):
             new_key = k.replace("encoder.cnn.", "encoder.")
+        elif k.startswith("encoder.proj."):
+            new_key = k.replace("encoder.proj.", "proj.")
         else:
             new_key = k
         new_state_dict[new_key] = v
@@ -117,6 +119,10 @@ except Exception as e:
     logger.error("Failed to load model checkpoint:")
     logger.error(traceback.format_exc())
     raise
+
+
+
+
 
 # -------------------- FASTAPI APP --------------------
 app = FastAPI()
