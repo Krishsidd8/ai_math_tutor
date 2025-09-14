@@ -222,7 +222,7 @@ def decode_image_to_latex(img: Image.Image, model, tokenizer, max_len=200, beam_
     ])
     img_t = transform(img).unsqueeze(0).to(device)
     memory = model.encoder(img_t)
-    beams = [(torch.tensor([tokenizer.t2i['<SOS>']], device=device), 0.0)]
+    beams = [(torch.tensor([[tokenizer.t2i['<SOS>']]], device=device), 0.0)]
     for step_idx in range(max_len):
         new_beams = []
         for seq, score in beams:
