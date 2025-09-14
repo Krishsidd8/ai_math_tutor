@@ -134,9 +134,11 @@ class OCRSeq2Seq(nn.Module):
         return logits
 
 # -------------------- LOAD MODEL --------------------
+# -------------------- LOAD MODEL CHECKPOINT --------------------
 try:
     logger.info("Loading model checkpoint...")
     ckpt = torch.load(checkpoint_path, map_location="cpu")
+    print("Checkpoint keys:", ckpt.keys())
     tokenizer = LatexTokenizer()
     tokenizer.vocab = ckpt['tokenizer_vocab']
     tokenizer.specials = ckpt['specials']
@@ -144,14 +146,22 @@ try:
     tokenizer.i2t = {i: tok for tok, i in tokenizer.t2i.items()}
     vocab_size = len(tokenizer.vocab)
     model = OCRSeq2Seq(vocab_size=vocab_size, d_model=512, nhead=8, num_layers=4, dim_ff=2048, dropout=0.1)
-    missing_keys, unexpected_keys = model.load_state_dict(ckpt['model'], strict=False)
-    if missing_keys or unexpected_keys:
-        logger.warning(f"Missing keys: {missing_keys}")
-        logger.warning(f"Unexpected keys: {unexpected_keys}")
-    model.eval()
+    checkpoint_state_dict = ckpt['model']
+    missing_keys, unexpected_keys = model.load_state_dict(checkpoint_state_dict, strict=False)
+    if missing_keys:
+        print("\n--- Missing keys (in model, not in checkpoint) ---")
+        for k in missing_keys:
+            print(k)
+    if unexpected_keys:
+        print("\n--- Unexpected keys (in checkpoint, not used by model) ---")
+        for k in unexpected_keys:
+            print(k)
+    if not missing_keys and not unexpected_keys:
+        print("\nAll checkpoint weights matched model keys!")
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model.to(device)
-    logger.info("Model loaded and ready.")
+    model.eval()
+    logger.info(f"Model loaded on {device} and ready for inference.")
 
 except Exception as e:
     logger.error("Failed to load model checkpoint:")
