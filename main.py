@@ -215,9 +215,6 @@ async def solve(file: UploadFile = File(...)):
 
 # -------------------- UNIFIED DECODER --------------------
 def decode_image_to_latex(img: Image.Image, model, tokenizer, max_len=200, beam_size=5, device='cpu') -> str:
-    """
-    Autoregressive decoding with optional beam search.
-    """
     model.eval()
     transform = transforms.Compose([
         transforms.Resize((max_height, max_width)),
@@ -231,13 +228,15 @@ def decode_image_to_latex(img: Image.Image, model, tokenizer, max_len=200, beam_
         for seq, score in beams:
             tgt_emb = model.embedding(seq) * math.sqrt(model.embedding.embedding_dim)
             tgt_emb = model.positional_encoding(tgt_emb)
+            device = seq.device
             tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(device)
             out = model.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
             logits = model.fc_out(out)
             log_probs = F.log_softmax(logits[-1, 0], dim=-1)
             topk_probs, topk_ids = log_probs.topk(beam_size)
             for tok_id, tok_prob in zip(topk_ids.tolist(), topk_probs.tolist()):
-                new_seq = torch.cat([seq, torch.tensor([[tok_id]], device=device)], dim=0)
+                next_tok_tensor = torch.tensor([[tok_id]], dtype=seq.dtype, device=seq.device)
+                new_seq = torch.cat([seq, next_tok_tensor], dim=0)
                 new_score = score + tok_prob
                 new_beams.append((new_seq, new_score))
         beams = sorted(new_beams, key=lambda x: x[1], reverse=True)[:beam_size]
