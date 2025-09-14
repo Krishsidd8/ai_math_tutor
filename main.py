@@ -12,6 +12,7 @@ from sympy import sympify, simplify
 from fastapi.middleware.cors import CORSMiddleware
 import math
 import traceback
+from torchvision.models import resnet18
 
 # -------------------- LOGGING CONFIG --------------------
 logging.basicConfig(
@@ -64,54 +65,86 @@ class PositionalEncoding1D(nn.Module):
         x = x + self.pe[:x.size(0)]
         return x
 
+class PositionalEncoding2D(nn.Module):
+    def __init__(self, d_model, height, width):
+        super().__init__()
+        self.height = height
+        self.width = width
+        self.d_model = d_model
+        if d_model % 4 != 0:
+            raise ValueError("d_model must be divisible by 4 for 2D PE")
+
+    def forward(self, x):
+        B, H, W, C = x.size()
+        pe = torch.zeros(H, W, C, device=x.device)
+        d_model = C
+        d_h = d_model // 2
+        d_w = d_model - d_h
+        div_term_h = torch.exp(torch.arange(0, d_h, 2, device=x.device) * -(math.log(10000.0) / d_h))
+        pos_h = torch.arange(0, H, device=x.device).unsqueeze(1)
+        pe[:, :, 0:d_h:2] = torch.sin(pos_h * div_term_h).unsqueeze(1)
+        pe[:, :, 1:d_h:2] = torch.cos(pos_h * div_term_h).unsqueeze(1)
+        div_term_w = torch.exp(torch.arange(0, d_w, 2, device=x.device) * -(math.log(10000.0) / d_w))
+        pos_w = torch.arange(0, W, device=x.device).unsqueeze(1)
+        pe[:, :, d_h::2] = torch.sin(pos_w * div_term_w).unsqueeze(0)
+        pe[:, :, d_h+1::2] = torch.cos(pos_w * div_term_w).unsqueeze(0)
+        return x + pe
+
+class EncoderResNet(nn.Module):
+    def __init__(self, pretrained=True, embed_dim=512):
+        super().__init__()
+        base = resnet18(weights="IMAGENET1K_V1" if pretrained else None)
+        layers = list(base.children())[:-2]
+        self.cnn = nn.Sequential(*layers)
+        self.proj = nn.Conv2d(512, embed_dim, kernel_size=1)
+        self.embed_dim = embed_dim
+        self.pe2d = None
+
+    def forward(self, x):
+        x = x.repeat(1, 3, 1, 1)
+        feats = self.cnn(x)
+        feats = self.proj(feats)
+        B, C, H, W = feats.size()
+        feats = feats.permute(0, 2, 3, 1)
+        if self.pe2d is None or self.pe2d.height != H or self.pe2d.width != W:
+            self.pe2d = PositionalEncoding2D(self.embed_dim, H, W)
+        feats = self.pe2d(feats)
+        feats = feats.view(B, H*W, C)
+        feats = feats.permute(1, 0, 2)
+        return feats
+
 class OCRSeq2Seq(nn.Module):
     def __init__(self, vocab_size, d_model=512, nhead=8, num_layers=4, dim_ff=2048, dropout=0.1):
         super().__init__()
-        from torchvision.models import resnet18
-        self.encoder = nn.Sequential(*list(resnet18(weights="IMAGENET1K_V1").children())[:-2])
-        self.proj = nn.Conv2d(512, d_model, kernel_size=1)
+        self.encoder = EncoderResNet(embed_dim=d_model)
         self.embedding = nn.Embedding(vocab_size, d_model)
         self.positional_encoding = PositionalEncoding1D(d_model)
         decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_ff, dropout=dropout, batch_first=False)
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
         self.fc_out = nn.Linear(d_model, vocab_size)
-        self.d_model = d_model
 
     def forward(self, imgs, tgt):
-        B, _, H, W = imgs.shape
-        x = imgs.repeat(1,3,1,1)
-        feats = self.encoder(x)
-        feats = self.proj(feats)
-        feats = feats.permute(0,2,3,1).view(B, -1, self.d_model).permute(1,0,2)
-        tgt_emb = self.embedding(tgt) * math.sqrt(self.d_model)
+        memory = self.encoder(imgs)
+        tgt_emb = self.embedding(tgt) * math.sqrt(memory.size(-1))
         tgt_emb = self.positional_encoding(tgt_emb)
         tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(tgt.device)
-        out = self.decoder(tgt_emb, feats, tgt_mask=tgt_mask)
-        return self.fc_out(out)
+        out = self.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
+        logits = self.fc_out(out)
+        return logits
 
 # -------------------- LOAD MODEL --------------------
 try:
     logger.info("Loading model checkpoint...")
     ckpt = torch.load(checkpoint_path, map_location="cpu")
-    print(ckpt.keys())
     tokenizer = LatexTokenizer()
     tokenizer.vocab = ckpt['tokenizer_vocab']
     tokenizer.specials = ckpt['specials']
     tokenizer.t2i = {tok: i for i, tok in enumerate(tokenizer.vocab)}
     tokenizer.i2t = {i: tok for tok, i in tokenizer.t2i.items()}
     state_dict = ckpt['model']
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        if k.startswith("encoder.cnn."):
-            new_key = k.replace("encoder.cnn.", "encoder.")
-        elif k.startswith("encoder.proj."):
-            new_key = k.replace("encoder.proj.", "proj.")
-        else:
-            new_key = k
-        new_state_dict[new_key] = v
     vocab_size = len(tokenizer.vocab)
     model = OCRSeq2Seq(vocab_size=vocab_size, d_model=512, nhead=8, num_layers=4, dim_ff=2048, dropout=0.1)
-    model.load_state_dict(new_state_dict)
+    model.load_state_dict(ckpt['model'])
     model.eval()
     logger.info("Model loaded and ready.")
 
@@ -140,6 +173,7 @@ async def predict(file: UploadFile = File(...)):
 @app.post("/solve")
 async def solve(file: UploadFile = File(...)):
     logger.info("Received /solve request.")
+    note = ""
     try:
         contents = await file.read()
         img = Image.open(io.BytesIO(contents))
@@ -199,10 +233,9 @@ def predict_image(img: Image.Image, max_len=60, device='cpu'):
 
     for step_idx in range(max_len):
         logger.info(f"Prediction step {step_idx+1}")
-        tgt_mask = torch.triu(torch.full((tgt.size(1), tgt.size(1)), float('-inf')), diagonal=1).to(device)
         logits = model(img_t, tgt)
         next_token = logits[-1, 0].argmax(dim=-1).view(1, 1)
-        tgt = torch.cat([tgt, next_token], dim=0)
+        tgt = torch.cat([tgt, next_token], dim=1)
         logger.info(f"Next token predicted: {next_token.item()} ({tokenizer.i2t.get(next_token.item(), 'UNK')})")
         
         if next_token.item() == tokenizer.t2i['<EOS>']:
@@ -212,7 +245,6 @@ def predict_image(img: Image.Image, max_len=60, device='cpu'):
     result = tokenizer.decode(tgt.squeeze().tolist())
     logger.info(f"Decoded LaTeX result: {result}")
     return result
-
 
 def predict_greedy(img, model, tokenizer, max_len=200, device='cpu'):
     logger.info("Starting greedy prediction pipeline...")
@@ -229,23 +261,25 @@ def predict_greedy(img, model, tokenizer, max_len=200, device='cpu'):
         memory = model.encoder(img.repeat(1,3,1,1))
         logger.info(f"Encoder output shape: {memory.shape}")
 
-        memory = model.proj(memory).permute(0,2,3,1).view(1,-1,model.d_model).permute(1,0,2)
-        logger.info(f"Projected memory shape: {memory.shape}")
-
         cur_seq = torch.tensor([[tokenizer.t2i['<SOS>']]], device=device)
+
         for step_idx in range(max_len):
-            tgt_emb = model.embedding(cur_seq) * math.sqrt(model.d_model)
+            tgt_emb = model.embedding(cur_seq) * math.sqrt(model.fc_out.in_features)
             tgt_emb = model.positional_encoding(tgt_emb)
+            tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_emb.size(0)).to(cur_seq.device)
             out = model.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
             logits = model.fc_out(out)
-            next_tok = logits[-1,0].argmax(-1).unsqueeze(0).unsqueeze(0)
+            next_tok = logits[-1,0].argmax(-1).view(1,1)
+
             logger.info(f"Step {step_idx+1}: predicted token {next_tok.item()} ({tokenizer.i2t.get(next_tok.item(),'UNK')})")
+
+            cur_seq = torch.cat([cur_seq, next_tok], dim=0)
+
             if next_tok.item() == tokenizer.t2i['<EOS>']:
                 logger.info("EOS token encountered; stopping greedy decoding.")
                 break
-            cur_seq = torch.cat([cur_seq, next_tok], dim=0)
 
-        result = tokenizer.decode(cur_seq[1:].squeeze().tolist())
+        result = tokenizer.decode(cur_seq[1:,0].tolist())
         logger.info(f"Greedy decoded LaTeX result: {result}")
         return result
 
